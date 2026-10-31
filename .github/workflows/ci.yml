@@ -1,0 +1,26 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release
+      - name: Unit tests
+        run: cargo test --release
+      - name: Headless render
+        run: cargo run --release -- render --out frame.ppm
+      - name: Window smoke test (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --release -- --ignored
+      - name: Window smoke test (macOS and Windows)
+        if: runner.os != 'Linux'
+        run: cargo test --release -- --ignored

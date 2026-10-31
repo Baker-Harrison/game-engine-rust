@@ -7,6 +7,7 @@ use crate::math::{clamp, Vec3};
 use crate::scene::Scene;
 use std::io::Write;
 
+#[derive(Clone)]
 pub struct Framebuffer {
     pub width: usize,
     pub height: usize,
@@ -41,8 +42,8 @@ fn pack(c: Vec3) -> u32 {
     (q(c.x) << 16) | (q(c.y) << 8) | q(c.z)
 }
 
-const SUN: Vec3 = Vec3::new(0.45, 0.80, 0.40);
-const AMBIENT: f32 = 0.45;
+pub const SUN: Vec3 = Vec3::new(0.45, 0.80, 0.40);
+pub const AMBIENT: f32 = 0.45;
 
 #[derive(Clone, Copy)]
 struct Sv {

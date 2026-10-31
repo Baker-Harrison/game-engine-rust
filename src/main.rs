@@ -1,6 +1,6 @@
 use engine::app;
 use engine::math::Vec3;
-use engine::render::{render, Framebuffer};
+use engine::gfx;
 use engine::scene::Scene;
 use std::process::exit;
 
@@ -9,9 +9,9 @@ const DEFAULT_SCENE: &str = include_str!("../scenes/default.scene");
 const HELP: &str = "engine - agent-first game engine (std only, no external crates)
 
 USAGE:
-  engine run    [SCENE] [--width N] [--height N]
+  engine run    [SCENE] [--width N] [--height N] [--renderer auto|cpu|metal]
   engine render [SCENE] --out FILE.ppm [--width N] [--height N]
-                [--pos X,Y,Z] [--yaw DEG] [--pitch DEG]
+                [--pos X,Y,Z] [--yaw DEG] [--pitch DEG] [--renderer cpu|metal]
   engine help
 
 `run` opens a window: WASD move, mouse look, Shift sprint, Tab toggles mouse
@@ -41,6 +41,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
     let mut scene_path: Option<&str> = None;
     let (mut width, mut height) = (960usize, 540usize);
     let mut out: Option<&str> = None;
+    let mut renderer = "auto";
     let (mut pos, mut yaw, mut pitch) = (None, None, None);
     let mut i = 0;
     while i < rest.len() {
@@ -53,6 +54,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
             "--width" => width = val()?.parse().map_err(|_| "bad --width")?,
             "--height" => height = val()?.parse().map_err(|_| "bad --height")?,
             "--out" => out = Some(val()?),
+            "--renderer" => renderer = val()?,
             "--yaw" => yaw = Some(val()?.parse::<f32>().map_err(|_| "bad --yaw")?),
             "--pitch" => pitch = Some(val()?.parse::<f32>().map_err(|_| "bad --pitch")?),
             "--pos" => {
@@ -82,12 +84,13 @@ fn real_main(args: &[String]) -> Result<(), String> {
 
     if cmd == "render" {
         let out = out.ok_or("render needs --out FILE.ppm")?;
-        let mut fb = Framebuffer::new(width, height);
-        render(&scene, &scene.camera, &mut fb);
+        let mut r = gfx::create_headless(renderer, width, height)?;
+        r.upload_scene(&scene)?;
+        let fb = r.render_offscreen(&scene, &scene.camera)?;
         fb.write_ppm(out).map_err(|e| format!("{}: {}", out, e))?;
         println!("wrote {} ({}x{})", out, width, height);
         Ok(())
     } else {
-        app::run(scene, width, height)
+        app::run(scene, width, height, renderer)
     }
 }

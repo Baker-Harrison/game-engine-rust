@@ -1,6 +1,6 @@
 //! Linux/X11 backend: raw FFI to libX11. Used for development and testing.
 
-use super::Window;
+use super::{NativeHandle, Window};
 use crate::input::Input;
 use crate::render::Framebuffer;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, CString};
@@ -188,6 +188,14 @@ impl Window for X11Window {
             XPutImage(self.d, self.win, self.gc, self.image, 0, 0, 0, 0, self.w as c_uint, self.h as c_uint);
             XFlush(self.d);
         }
+    }
+
+    fn native_handle(&self) -> NativeHandle {
+        NativeHandle::X11 { display: self.d, window: self.win as u64 }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (self.w, self.h)
     }
 
     fn set_capture(&mut self, on: bool) {

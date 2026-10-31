@@ -1,7 +1,7 @@
 use crate::camera::MAX_PITCH;
 use crate::input::Input;
 use crate::platform;
-use crate::render::{render, Framebuffer};
+use crate::gfx;
 use crate::scene::Scene;
 use crate::math::{clamp, Vec3};
 use std::time::{Duration, Instant};
@@ -37,9 +37,11 @@ pub fn update(scene: &mut Scene, input: &Input, dt: f32) {
     }
 }
 
-pub fn run(mut scene: Scene, width: usize, height: usize) -> Result<(), String> {
+pub fn run(mut scene: Scene, width: usize, height: usize, renderer: &str) -> Result<(), String> {
     let mut window = platform::open("engine", width, height)?;
-    let mut fb = Framebuffer::new(width, height);
+    let mut gpu = gfx::create(renderer, width, height, window.as_ref())?;
+    gpu.upload_scene(&scene)?;
+    println!("renderer: {}", gpu.name());
     let mut input = Input::default();
     window.set_capture(true);
     let mut captured = true;
@@ -65,8 +67,7 @@ pub fn run(mut scene: Scene, width: usize, height: usize) -> Result<(), String> 
         let dt = (now - last).as_secs_f32().min(0.1);
         last = now;
         update(&mut scene, &input, dt);
-        render(&scene, &scene.camera, &mut fb);
-        window.present(&fb);
+        gpu.render(&scene, &scene.camera, window.as_mut())?;
         frames += 1;
         if title_timer.elapsed() >= Duration::from_secs(2) {
             println!("{:.0} fps", frames as f32 / title_timer.elapsed().as_secs_f32());

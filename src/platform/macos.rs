@@ -5,10 +5,10 @@
 use super::Window;
 use crate::input::Input;
 use crate::render::Framebuffer;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::c_void;
 
-type Id = *mut c_void;
-type Sel = *mut c_void;
+use super::objc::*;
+use super::NativeHandle;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -18,22 +18,6 @@ struct NSRect {
     w: f64,
     h: f64,
 }
-
-#[link(name = "objc")]
-extern "C" {
-    fn objc_getClass(name: *const c_char) -> Id;
-    fn sel_registerName(name: *const c_char) -> Sel;
-    // Declared without arguments on purpose: it is transmuted to the exact
-    // signature of each call (the variadic ABI differs on Apple arm64).
-    fn objc_msgSend();
-    fn objc_autoreleasePoolPush() -> *mut c_void;
-    fn objc_autoreleasePoolPop(pool: *mut c_void);
-}
-
-#[link(name = "AppKit", kind = "framework")]
-#[link(name = "Foundation", kind = "framework")]
-#[link(name = "QuartzCore", kind = "framework")]
-extern "C" {}
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -65,29 +49,6 @@ extern "C" {
     fn CFRelease(obj: *const c_void);
 }
 
-unsafe fn sel(name: &str) -> Sel {
-    let c = CString::new(name).unwrap();
-    sel_registerName(c.as_ptr())
-}
-
-unsafe fn class(name: &str) -> Id {
-    let c = CString::new(name).unwrap();
-    objc_getClass(c.as_ptr())
-}
-
-macro_rules! send {
-    ($ret:ty; $recv:expr, $sel:expr $(, $argt:ty = $arg:expr)* $(,)?) => {{
-        let f: unsafe extern "C" fn(Id, Sel $(, $argt)*) -> $ret =
-            std::mem::transmute(objc_msgSend as *const ());
-        f($recv as Id, sel($sel) $(, $arg)*)
-    }};
-}
-
-unsafe fn nsstring(s: &str) -> Id {
-    let c = CString::new(s).unwrap();
-    send!(Id; class("NSString"), "stringWithUTF8String:", *const c_char = c.as_ptr())
-}
-
 extern "C" fn release_pixels(info: *mut c_void, _data: *const c_void, _size: usize) {
     unsafe { drop(Box::from_raw(info as *mut Vec<u32>)) };
 }
@@ -106,6 +67,7 @@ pub struct MacWindow {
     view: Id,
     captured: bool,
     cursor_hidden: bool,
+    size: (usize, usize),
 }
 
 impl MacWindow {
@@ -134,7 +96,7 @@ impl MacWindow {
             send!((); app, "activateIgnoringOtherApps:", bool = true);
             send!((); app, "finishLaunching");
             objc_autoreleasePoolPop(pool);
-            Ok(MacWindow { app, window, view, captured: false, cursor_hidden: false })
+            Ok(MacWindow { app, window, view, captured: false, cursor_hidden: false, size: (w, h) })
         }
     }
 }
@@ -214,6 +176,14 @@ impl Window for MacWindow {
             CFRelease(provider);
             objc_autoreleasePoolPop(pool);
         }
+    }
+
+    fn native_handle(&self) -> NativeHandle {
+        NativeHandle::MacView(self.view)
+    }
+
+    fn size(&self) -> (usize, usize) {
+        self.size
     }
 
     fn set_capture(&mut self, on: bool) {

@@ -2,7 +2,7 @@
 //! StretchDIBits. Keys and buttons are polled with GetAsyncKeyState, and mouse
 //! look re-centers the cursor each frame.
 
-use super::Window;
+use super::{NativeHandle, Window};
 use crate::input::Input;
 use crate::render::Framebuffer;
 use std::ffi::c_void;
@@ -235,6 +235,14 @@ impl Window for WinWindow {
                 fb.pixels.as_ptr() as *const c_void, &hdr, 0, SRCCOPY);
             ReleaseDC(self.hwnd, dc);
         }
+    }
+
+    fn native_handle(&self) -> NativeHandle {
+        NativeHandle::Win32(self.hwnd)
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (self.w, self.h)
     }
 
     fn set_capture(&mut self, on: bool) {
