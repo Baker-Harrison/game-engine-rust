@@ -9,7 +9,7 @@ const DEFAULT_SCENE: &str = include_str!("../scenes/default.scene");
 const HELP: &str = "engine - agent-first game engine (std only, no external crates)
 
 USAGE:
-  engine run    [SCENE] [--width N] [--height N] [--renderer auto|cpu|metal]
+  engine run    [SCENE] [--width N] [--height N] [--renderer auto|cpu|metal|vulkan] [--frames N]
   engine render [SCENE] --out FILE.ppm [--width N] [--height N]
                 [--pos X,Y,Z] [--yaw DEG] [--pitch DEG] [--renderer cpu|metal]
   engine help
@@ -42,6 +42,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
     let (mut width, mut height) = (960usize, 540usize);
     let mut out: Option<&str> = None;
     let mut renderer = "auto";
+    let mut max_frames: Option<usize> = None;
     let (mut pos, mut yaw, mut pitch) = (None, None, None);
     let mut i = 0;
     while i < rest.len() {
@@ -55,6 +56,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
             "--height" => height = val()?.parse().map_err(|_| "bad --height")?,
             "--out" => out = Some(val()?),
             "--renderer" => renderer = val()?,
+            "--frames" => max_frames = Some(val()?.parse().map_err(|_| "bad --frames")?),
             "--yaw" => yaw = Some(val()?.parse::<f32>().map_err(|_| "bad --yaw")?),
             "--pitch" => pitch = Some(val()?.parse::<f32>().map_err(|_| "bad --pitch")?),
             "--pos" => {
@@ -91,6 +93,6 @@ fn real_main(args: &[String]) -> Result<(), String> {
         println!("wrote {} ({}x{})", out, width, height);
         Ok(())
     } else {
-        app::run(scene, width, height, renderer)
+        app::run(scene, width, height, renderer, max_frames)
     }
 }

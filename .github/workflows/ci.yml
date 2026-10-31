@@ -24,9 +24,11 @@ jobs:
         run: cargo test --release
       - name: Headless render
         run: cargo run --release -- render --out frame.ppm
+      # Opens a real window for 30 frames on the main thread (AppKit requires the main thread,
+      # which is why this is not a cargo test).
       - name: Window smoke test (Linux, virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a cargo test --release -- --ignored
+        run: xvfb-run -a cargo run --release -- run --frames 30
       - name: Window smoke test (macOS and Windows)
         if: runner.os != 'Linux'
-        run: cargo test --release -- --ignored
+        run: cargo run --release -- run --frames 30

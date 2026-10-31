@@ -37,7 +37,8 @@ pub fn update(scene: &mut Scene, input: &Input, dt: f32) {
     }
 }
 
-pub fn run(mut scene: Scene, width: usize, height: usize, renderer: &str) -> Result<(), String> {
+/// `max_frames` makes the loop exit by itself (used by CI smoke tests and agents).
+pub fn run(mut scene: Scene, width: usize, height: usize, renderer: &str, max_frames: Option<usize>) -> Result<(), String> {
     let mut window = platform::open("engine", width, height)?;
     let mut gpu = gfx::create(renderer, width, height, window.as_ref())?;
     gpu.upload_scene(&scene)?;
@@ -48,6 +49,7 @@ pub fn run(mut scene: Scene, width: usize, height: usize, renderer: &str) -> Res
     let mut last = Instant::now();
     let mut title_timer = Instant::now();
     let mut frames = 0u32;
+    let mut total_frames = 0usize;
     println!("Controls: WASD move, mouse look, Shift sprint, Tab release/capture mouse, click to recapture, Esc quit");
     loop {
         input.begin_frame();
@@ -69,6 +71,10 @@ pub fn run(mut scene: Scene, width: usize, height: usize, renderer: &str) -> Res
         update(&mut scene, &input, dt);
         gpu.render(&scene, &scene.camera, window.as_mut())?;
         frames += 1;
+        total_frames += 1;
+        if max_frames.map_or(false, |m| total_frames >= m) {
+            break;
+        }
         if title_timer.elapsed() >= Duration::from_secs(2) {
             println!("{:.0} fps", frames as f32 / title_timer.elapsed().as_secs_f32());
             frames = 0;

@@ -16,6 +16,8 @@ pub enum NativeHandle {
     X11 { display: *mut std::ffi::c_void, window: u64 },
 }
 
+pub(crate) mod dl;
+
 pub trait Window {
     /// Pumps OS events into `input`. Returns false once the window is closed.
     fn poll(&mut self, input: &mut Input) -> bool;

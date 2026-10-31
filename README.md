@@ -22,6 +22,8 @@ macOS: the first launch may ask for no permissions; if the window opens behind t
 - macOS: Metal. Linux and Windows: Vulkan. `auto` falls back to the CPU renderer if the GPU backend cannot start.
 - The CPU renderer is the reference. `cargo test` renders the same frames with the CPU and GPU backends and checks they match.
 - The Vulkan loader is opened at runtime, so building needs no Vulkan SDK. Shaders are checked-in SPIR-V; regenerate with `shaders/build.sh` (needs `glslangValidator`).
+- `engine run --frames N` exits after N frames (used by CI smoke tests).
+- Linux: libX11 and the Vulkan loader are opened at runtime, so building needs no dev packages.
 - Headless GPU render: `engine render --renderer vulkan --out frame.ppm`.
 
 ## For agents
