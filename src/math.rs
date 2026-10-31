@@ -1,4 +1,4 @@
-use std::ops::{Add, Mul, Neg, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vec3 {
@@ -36,6 +36,36 @@ impl Vec3 {
     }
     pub fn lerp(self, o: Vec3, t: f32) -> Vec3 {
         self + (o - self) * t
+    }
+    pub const fn splat(v: f32) -> Vec3 {
+        Vec3::new(v, v, v)
+    }
+    pub fn min(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.x.min(o.x), self.y.min(o.y), self.z.min(o.z))
+    }
+    pub fn max(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.x.max(o.x), self.y.max(o.y), self.z.max(o.z))
+    }
+    pub fn abs(self) -> Vec3 {
+        Vec3::new(self.x.abs(), self.y.abs(), self.z.abs())
+    }
+    pub fn mul_elements(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.x * o.x, self.y * o.y, self.z * o.z)
+    }
+    pub fn max_element(self) -> f32 {
+        self.x.max(self.y).max(self.z)
+    }
+}
+
+impl AddAssign for Vec3 {
+    fn add_assign(&mut self, o: Vec3) {
+        *self = *self + o;
+    }
+}
+impl Div<f32> for Vec3 {
+    type Output = Vec3;
+    fn div(self, s: f32) -> Vec3 {
+        self * (1.0 / s)
     }
 }
 

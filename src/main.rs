@@ -12,6 +12,9 @@ USAGE:
   engine run    [SCENE] [--width N] [--height N] [--renderer auto|cpu|metal|vulkan] [--frames N]
   engine render [SCENE] --out FILE.ppm [--width N] [--height N]
                 [--pos X,Y,Z] [--yaw DEG] [--pitch DEG] [--renderer cpu|metal]
+  engine asset list
+  engine asset NAME [key=value ...] [--obj FILE.obj]
+  engine inspect NAME [key=value ...] --out DIR
   engine help
 
 `run` opens a window: WASD move, mouse look, Shift sprint, Tab toggles mouse
@@ -32,6 +35,9 @@ fn real_main(args: &[String]) -> Result<(), String> {
     if matches!(cmd, "help" | "--help" | "-h") {
         println!("{}", HELP);
         return Ok(());
+    }
+    if cmd == "asset" || cmd == "inspect" {
+        return asset_command(cmd, &args[1..]);
     }
     if !matches!(cmd, "run" | "render") {
         return Err(format!("unknown command '{}'\n\n{}", cmd, HELP));
@@ -95,4 +101,51 @@ fn real_main(args: &[String]) -> Result<(), String> {
     } else {
         app::run(scene, width, height, renderer, max_frames)
     }
+}
+
+fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
+    if command == "asset" && rest.first().map(String::as_str) == Some("list") {
+        for definition in engine::assets::definitions() {
+            println!("{}  {}", definition.name, definition.summary);
+            let parameters: Vec<String> = definition.parameters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+            println!("    {}", parameters.join(" "));
+        }
+        return Ok(());
+    }
+    let name = rest.first().ok_or("expected an asset name; try: engine asset list")?;
+    let mut overrides = Vec::new();
+    let mut out: Option<&str> = None;
+    let mut obj: Option<&str> = None;
+    let mut i = 1;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--out" => {
+                i += 1;
+                out = Some(rest.get(i).ok_or("--out needs a value")?);
+            }
+            "--obj" => {
+                i += 1;
+                obj = Some(rest.get(i).ok_or("--obj needs a value")?);
+            }
+            other => overrides.push(engine::assets::parse_override(other)?),
+        }
+        i += 1;
+    }
+    let asset = engine::assets::build(name, &overrides)?;
+    if command == "inspect" {
+        let out = out.ok_or("inspect needs --out DIR")?;
+        let result = engine::inspect::inspect(&asset, out)?;
+        println!("{}", result.report);
+        for file in result.files {
+            println!("wrote {}", file);
+        }
+        return Ok(());
+    }
+    let mesh = asset.merged_mesh(&[]);
+    println!("{}: {} triangles", name, mesh.triangle_count());
+    if let Some(path) = obj {
+        mesh.write_obj(path)?;
+        println!("wrote {}", path);
+    }
+    Ok(())
 }
