@@ -15,6 +15,15 @@ Controls: **WASD** move, **mouse** look, **Shift** sprint, **Tab** release or re
 
 macOS: the first launch may ask for no permissions; if the window opens behind the terminal, click its Dock icon.
 
+## Renderers
+
+`--renderer auto|cpu|metal|vulkan` (default `auto`):
+
+- macOS: Metal. Linux and Windows: Vulkan. `auto` falls back to the CPU renderer if the GPU backend cannot start.
+- The CPU renderer is the reference. `cargo test` renders the same frames with the CPU and GPU backends and checks they match.
+- The Vulkan loader is opened at runtime, so building needs no Vulkan SDK. Shaders are checked-in SPIR-V; regenerate with `shaders/build.sh` (needs `glslangValidator`).
+- Headless GPU render: `engine render --renderer vulkan --out frame.ppm`.
+
 ## For agents
 
 ```
@@ -29,10 +38,10 @@ Scenes are plain text, see `scenes/default.scene`.
 
 - `src/math.rs`, `camera.rs`, `scene.rs`, `input.rs`: platform-independent core
 - `src/render.rs`: software rasterizer (clipping, z-buffer, shading, fog)
+- `src/gfx/`: engine-owned `Renderer` trait with `cpu.rs`, `metal.rs`, `vulkan.rs`
 - `src/platform/`: `macos.rs` (AppKit via the Objective-C runtime), `win32.rs`, `x11.rs`
 - `src/app.rs`: game loop and first-person movement with box collision
 
 ## Status
 
-Verified: headless render and the X11 backend (Linux, under Xvfb). The macOS and
-Windows backends type-check for their targets but were not run by the author.
+Verified on Linux: CPU renderer, X11 window, and the Vulkan backend (software Vulkan, window and headless, matching the CPU renderer). The macOS (window + Metal) and Windows backends type-check but have not been run on real machines. There is no D3D12 backend yet; Windows GPUs ship Vulkan drivers, so Vulkan covers them.

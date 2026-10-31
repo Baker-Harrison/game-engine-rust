@@ -24,7 +24,7 @@ fn check_backend(name: &str) {
     let mut cpu = gfx::create_headless("cpu", w, h).unwrap();
     let mut gpu = match gfx::create_headless(name, w, h) {
         Ok(g) => g,
-        Err(e) if e.contains("no ") && e.contains("device") => {
+        Err(e) if e.contains("no Vulkan") || e.contains("no Metal") => {
             eprintln!("skipping {}: {}", name, e);
             return;
         }
@@ -50,5 +50,7 @@ fn check_backend(name: &str) {
 fn gpu_backends_match_cpu_reference() {
     #[cfg(target_os = "macos")]
     check_backend("metal");
+    #[cfg(not(target_os = "macos"))]
+    check_backend("vulkan");
     let _ = check_backend; // keeps the helper used on platforms with no GPU backend yet
 }

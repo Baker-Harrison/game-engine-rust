@@ -8,6 +8,8 @@
 pub mod cpu;
 #[cfg(target_os = "macos")]
 pub mod metal;
+#[cfg(not(target_os = "macos"))]
+pub mod vulkan;
 
 use crate::camera::Camera;
 use crate::platform::Window;
@@ -83,7 +85,14 @@ pub fn create(kind: &str, width: usize, height: usize, window: &dyn Window) -> R
         "cpu" => Ok(Box::new(cpu::CpuRenderer::new(width, height))),
         #[cfg(target_os = "macos")]
         "metal" => Ok(Box::new(metal::MetalRenderer::new(window)?)),
+        #[cfg(not(target_os = "macos"))]
+        "vulkan" => Ok(Box::new(vulkan::VulkanRenderer::new(window)?)),
         "auto" => {
+            #[cfg(not(target_os = "macos"))]
+            match vulkan::VulkanRenderer::new(window) {
+                Ok(r) => return Ok(Box::new(r)),
+                Err(e) => eprintln!("warning: Vulkan unavailable ({}), using the CPU renderer", e),
+            }
             #[cfg(target_os = "macos")]
             match metal::MetalRenderer::new(window) {
                 Ok(r) => return Ok(Box::new(r)),
@@ -102,6 +111,8 @@ pub fn create_headless(kind: &str, width: usize, height: usize) -> Result<Box<dy
         "cpu" | "auto" => Ok(Box::new(cpu::CpuRenderer::new(width, height))),
         #[cfg(target_os = "macos")]
         "metal" => Ok(Box::new(metal::MetalRenderer::new_headless(width, height)?)),
+        #[cfg(not(target_os = "macos"))]
+        "vulkan" => Ok(Box::new(vulkan::VulkanRenderer::new_headless(width, height)?)),
         other => Err(format!("unknown or unavailable renderer '{}' (available here: {})", other, available())),
     }
 }
@@ -110,6 +121,6 @@ pub fn available() -> &'static str {
     if cfg!(target_os = "macos") {
         "cpu, metal"
     } else {
-        "cpu"
+        "cpu, vulkan"
     }
 }
