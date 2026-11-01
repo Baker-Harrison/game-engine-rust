@@ -9,7 +9,7 @@ pub mod vulkan;
 use crate::camera::Camera;
 use crate::platform::Window;
 use crate::render::Framebuffer;
-use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene, Tri};
+use crate::scene::{AlphaMode, OverlayItem, OverlayRect, OverlayTri, Scene, Tri};
 
 pub const FAR_PLANE: f32 = 500.0;
 #[repr(C)]
@@ -35,7 +35,12 @@ pub const KIND_UNLIT: f32 = 1.0;
 pub const KIND_SCREEN: f32 = 2.0;
 pub const MAX_DYNAMIC_VERTICES: usize = 400_000;
 
-fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
+fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri, mode: AlphaMode) {
+    let mode = match mode {
+        AlphaMode::Opaque => 0.0,
+        AlphaMode::Cutout => 1.0,
+        AlphaMode::Blend => 2.0,
+    };
     let kind = if triangle.unlit { KIND_UNLIT } else { KIND_LIT };
     for i in 0..3 {
         let (v, n, c) = (triangle.v[i], triangle.n[i], triangle.c[i]);
@@ -44,7 +49,7 @@ fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
             pos: [v.x, v.y, v.z, 1.0],
             normal: [n.x, n.y, n.z, kind],
             color: [c.x, c.y, c.z, 1.0],
-            uv: [triangle.t[i][0], triangle.t[i][1], layer, 0.0],
+            uv: [triangle.t[i][0], triangle.t[i][1], layer, mode],
         });
     }
 }
@@ -74,17 +79,26 @@ fn overlay_vertex_count(item: &OverlayItem) -> usize {
 
 pub fn build_vertices(scene: &Scene) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(scene.tris.len() * 3);
-    for triangle in &scene.tris {
-        push_triangle(&mut out, triangle);
+    for blended in [false, true] {
+        for triangle in scene.tris.iter().filter(|t| scene.is_blended(t) == blended) {
+            push_triangle(&mut out, triangle, scene.alpha_mode_of(triangle));
+        }
     }
     out
 }
 
+pub fn static_opaque_vertex_count(scene: &Scene) -> usize {
+    scene.tris.iter().filter(|t| !scene.is_blended(t)).count() * 3
+}
+
 pub fn build_dynamic_vertices(scene: &Scene) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(scene.dynamic.len() * 3 + scene.overlay.len() * 4);
-    for triangle in &scene.dynamic {
-        push_triangle(&mut out, triangle);
+    for blended in [false, true] {
+        for triangle in scene.dynamic.iter().filter(|t| scene.is_blended(t) == blended) {
+            push_triangle(&mut out, triangle, scene.alpha_mode_of(triangle));
+        }
     }
+    let triangle_end = out.len().min(MAX_DYNAMIC_VERTICES);
     let steps = scene.overlay.len().max(1) as f32;
     for (index, item) in scene.overlay.iter().enumerate() {
         if out.len() + overlay_vertex_count(item) > MAX_DYNAMIC_VERTICES {
@@ -96,8 +110,53 @@ pub fn build_dynamic_vertices(scene: &Scene) -> Vec<Vertex> {
             OverlayItem::Tri(tri) => push_overlay_tri(&mut out, tri, depth),
         }
     }
-    out.truncate(MAX_DYNAMIC_VERTICES);
+    out.truncate(MAX_DYNAMIC_VERTICES.max(triangle_end));
     out
+}
+
+pub fn dynamic_opaque_vertex_count(scene: &Scene) -> usize {
+    (scene.dynamic.iter().filter(|t| !scene.is_blended(t)).count() * 3).min(MAX_DYNAMIC_VERTICES)
+}
+
+pub fn dynamic_triangle_vertex_count(scene: &Scene) -> usize {
+    (scene.dynamic.len() * 3).min(MAX_DYNAMIC_VERTICES)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawRange {
+    pub blend_pass: bool,
+    pub dynamic: bool,
+    pub first: usize,
+    pub count: usize,
+}
+
+pub struct DrawCounts {
+    pub static_total: usize,
+    pub static_opaque: usize,
+    pub dynamic_total: usize,
+    pub dynamic_opaque: usize,
+    pub dynamic_triangles: usize,
+}
+
+pub fn draw_counts(scene: &Scene, static_total: usize, dynamic_total: usize) -> DrawCounts {
+    DrawCounts {
+        static_total,
+        static_opaque: static_opaque_vertex_count(scene).min(static_total),
+        dynamic_total,
+        dynamic_opaque: dynamic_opaque_vertex_count(scene).min(dynamic_total),
+        dynamic_triangles: dynamic_triangle_vertex_count(scene).min(dynamic_total),
+    }
+}
+
+pub fn draw_plan(c: &DrawCounts) -> Vec<DrawRange> {
+    let ranges = [
+        DrawRange { blend_pass: false, dynamic: false, first: 0, count: c.static_opaque },
+        DrawRange { blend_pass: false, dynamic: true, first: 0, count: c.dynamic_opaque },
+        DrawRange { blend_pass: true, dynamic: false, first: c.static_opaque, count: c.static_total - c.static_opaque },
+        DrawRange { blend_pass: true, dynamic: true, first: c.dynamic_opaque, count: c.dynamic_triangles - c.dynamic_opaque },
+        DrawRange { blend_pass: false, dynamic: true, first: c.dynamic_triangles, count: c.dynamic_total - c.dynamic_triangles },
+    ];
+    ranges.into_iter().filter(|r| r.count > 0).collect()
 }
 
 pub fn frame_uniforms(scene: &Scene, cam: &Camera, aspect: f32, flip_y: bool) -> FrameUniforms {

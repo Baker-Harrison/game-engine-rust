@@ -1,7 +1,7 @@
 
 use crate::camera::Camera;
 use crate::math::{clamp, Vec3};
-use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene, SurfaceMaps};
+use crate::scene::{AlphaMode, OverlayItem, OverlayRect, OverlayTri, Scene, SurfaceMaps};
 use std::io::Write;
 
 #[derive(Clone)]
@@ -129,7 +129,7 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
     };
     let layout = PixelLayout { tan_half, aspect, width, height };
 
-    for tri in scene.tris.iter().chain(scene.dynamic.iter()) {
+    for tri in scene.tris.iter().chain(scene.dynamic.iter()).filter(|t| !scene.is_blended(t)).chain(scene.tris.iter().chain(scene.dynamic.iter()).filter(|t| scene.is_blended(t))) {
         let [a, b, c] = tri.v;
         let facing_away = (tri.n[0] + tri.n[1] + tri.n[2]).dot(cam.pos - a) < 0.0;
         let normal_sign = if facing_away { -1.0 } else { 1.0 };
@@ -289,12 +289,13 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
             if inv_z <= fb.depth[idx] {
                 continue;
             }
-            fb.depth[idx] = inv_z;
             let mut normal = (a.normal_over_z * w0 + b.normal_over_z * w1 + c.normal_over_z * w2) / inv_z;
             let mut base = (a.color_over_z * w0 + b.color_over_z * w1 + c.color_over_z * w2) / inv_z;
             let mut roughness = 0.85;
             let mut metallic = 0.0;
             let mut occlusion = 1.0;
+            let mut opacity = 1.0;
+            let mut blended = false;
             if let Some(surface) = textured {
                 let uv_at = |sx: f32, sy: f32| {
                     let v0 = ((b.x - sx) * (c.y - sy) - (b.y - sy) * (c.x - sx)) * inv_area;
@@ -320,9 +321,20 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
                 let perturbed = surface.tangent * nx + surface.bitangent * ny + geometric * nz;
                 normal = if perturbed.length() > 1e-6 { perturbed.normalized() } else { geometric };
                 base = Vec3::new(albedo[0], albedo[1], albedo[2]);
+                match surface.maps.alpha_mode {
+                    AlphaMode::Cutout if albedo[3] < 0.5 => continue,
+                    AlphaMode::Blend => {
+                        opacity = albedo[3];
+                        blended = true;
+                    }
+                    _ => {}
+                }
                 roughness = packed[0].max(0.04);
                 metallic = packed[1];
                 occlusion = packed[2];
+            }
+            if !blended {
+                fb.depth[idx] = inv_z;
             }
             let shade = if unlit {
                 1.0
@@ -347,7 +359,8 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
             }
             let t = clamp(1.0 / inv_z / fog, 0.0, 1.0);
             let t = t * t;
-            fb.pixels[idx] = pack(lit.lerp(sky, t));
+            let color = lit.lerp(sky, t);
+            fb.pixels[idx] = if blended { blend(fb.pixels[idx], color, opacity) } else { pack(color) };
         }
     }
 }

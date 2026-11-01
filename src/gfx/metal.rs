@@ -1,5 +1,5 @@
 
-use super::{build_dynamic_vertices, build_vertices, frame_uniforms, pack_materials, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
+use super::{build_dynamic_vertices, build_vertices, draw_counts, draw_plan, frame_uniforms, pack_materials, DrawRange, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
 use crate::camera::Camera;
 use crate::platform::objc::*;
 use crate::platform::{NativeHandle, Window};
@@ -51,6 +51,7 @@ struct VOut {
     float kind;
     float2 uv;
     float layer [[flat]];
+    float mode [[flat]];
 };
 
 vertex VOut vs(uint vid [[vertex_id]], constant Vertex* verts [[buffer(0)]], constant U& u [[buffer(1)]]) {
@@ -64,6 +65,7 @@ vertex VOut vs(uint vid [[vertex_id]], constant Vertex* verts [[buffer(0)]], con
     o.depth = o.position.w;
     o.uv = v.uv.xy;
     o.layer = v.uv.z;
+    o.mode = v.uv.w;
     return o;
 }
 
@@ -80,6 +82,7 @@ fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
     float roughness = 0.85;
     float metallic = 0.0;
     float occlusion = 1.0;
+    float alpha = 1.0;
     bool textured = i.layer > 0.5 && i.kind < 0.5;
     float3 dp1 = dfdx(i.world);
     float3 dp2 = dfdy(i.world);
@@ -95,7 +98,10 @@ fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
         float3 texel_normal = normal_tex.sample(material_sampler, i.uv, slice).xyz * 2.0 - 1.0;
         float3 perturbed = tangent * inverse_scale * texel_normal.x + bitangent * inverse_scale * texel_normal.y + n * texel_normal.z;
         if (dot(perturbed, perturbed) > 1e-8) n = normalize(perturbed);
-        base = albedo_tex.sample(material_sampler, i.uv, slice).xyz;
+        float4 albedo = albedo_tex.sample(material_sampler, i.uv, slice);
+        base = albedo.xyz;
+        if (i.mode > 0.5 && i.mode < 1.5 && albedo.a < 0.5) discard_fragment();
+        if (i.mode > 1.5) alpha = albedo.a;
         float3 surface = packed_tex.sample(material_sampler, i.uv, slice).xyz;
         roughness = max(surface.x, 0.04);
         metallic = surface.y;
@@ -117,7 +123,7 @@ fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
     }
     float t = clamp(i.depth / u.params.x, 0.0, 1.0);
     t = t * t;
-    return float4(mix(lit, u.sky.xyz, t), 1.0);
+    return float4(mix(lit, u.sky.xyz, t), alpha);
 }
 "#;
 
@@ -126,6 +132,9 @@ pub struct MetalRenderer {
     queue: Id,
     pipeline: Id,
     depth_state: Id,
+    blend_depth_state: Id,
+    static_opaque: usize,
+    draws: Vec<DrawRange>,
     depth_tex: Id,
     layer: Id,
     vertex_buf: Id,
@@ -216,8 +225,10 @@ impl MetalRenderer {
         send!((); dd, "setDepthWriteEnabled:", bool = true);
         let depth_state = send!(Id; device, "newDepthStencilStateWithDescriptor:", Id = dd);
 
+        send!((); dd, "setDepthWriteEnabled:", bool = false);
+        let blend_depth_state = send!(Id; device, "newDepthStencilStateWithDescriptor:", Id = dd);
         let queue = send!(Id; device, "newCommandQueue");
-        if queue.is_null() || depth_state.is_null() {
+        if queue.is_null() || depth_state.is_null() || blend_depth_state.is_null() {
             return Err("Metal queue creation failed".into());
         }
         let depth_tex = make_depth_texture(device, w, h);
@@ -234,6 +245,9 @@ impl MetalRenderer {
             queue,
             pipeline,
             depth_state,
+            blend_depth_state,
+            static_opaque: 0,
+            draws: Vec::new(),
             depth_tex,
             layer,
             vertex_buf: std::ptr::null_mut(),
@@ -329,11 +343,15 @@ impl MetalRenderer {
             send!((); enc, "setFragmentTexture:atIndex:", Id = *texture, usize = index);
         }
         send!((); enc, "setFragmentSamplerState:atIndex:", Id = self.material_sampler, usize = 0);
-        for (buffer, count) in [(self.vertex_buf, self.vertex_count), (self.dynamic_buffers[slot], self.dynamic_count)] {
-            if count > 0 && !buffer.is_null() {
-                send!((); enc, "setVertexBuffer:offset:atIndex:", Id = buffer, usize = 0, usize = 0);
-                send!((); enc, "drawPrimitives:vertexStart:vertexCount:", usize = 3, usize = 0, usize = count);
+        for range in &self.draws {
+            let buffer = if range.dynamic { self.dynamic_buffers[slot] } else { self.vertex_buf };
+            if buffer.is_null() {
+                continue;
             }
+            let state = if range.blend_pass { self.blend_depth_state } else { self.depth_state };
+            send!((); enc, "setDepthStencilState:", Id = state);
+            send!((); enc, "setVertexBuffer:offset:atIndex:", Id = buffer, usize = 0, usize = 0);
+            send!((); enc, "drawPrimitives:vertexStart:vertexCount:", usize = 3, usize = range.first, usize = range.count);
         }
         send!((); enc, "endEncoding");
         cb
@@ -355,6 +373,9 @@ impl MetalRenderer {
         let destination = send!(Id; self.dynamic_buffers[slot], "contents") as *mut u8;
         std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, destination, verts.len() * std::mem::size_of::<Vertex>());
         self.dynamic_count = verts.len();
+        let mut counts = draw_counts(scene, self.vertex_count, verts.len());
+        counts.static_opaque = self.static_opaque.min(self.vertex_count);
+        self.draws = draw_plan(&counts);
     }
 }
 
@@ -369,6 +390,7 @@ impl Renderer for MetalRenderer {
             let arrays = pack_materials(scene);
             self.upload_materials(arrays.as_ref())?;
             self.vertex_count = verts.len();
+            self.static_opaque = super::static_opaque_vertex_count(scene).min(verts.len());
             if verts.is_empty() {
                 return Ok(());
             }

@@ -59,7 +59,15 @@ pub struct Ground {
     pub color_b: Vec3,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AlphaMode {
+    Opaque,
+    Cutout,
+    Blend,
+}
+
 pub struct SurfaceMaps {
+    pub alpha_mode: AlphaMode,
     pub albedo: crate::mips::MipTexture,
     pub normal: crate::mips::MipTexture,
     pub packed: crate::mips::MipTexture,
@@ -101,12 +109,28 @@ impl Scene {
     }
 
     pub fn add_material(&mut self, albedo: &crate::texture::Texture, normal: &crate::texture::Texture, packed: &crate::texture::Texture) -> u16 {
+        self.add_material_alpha(albedo, normal, packed, AlphaMode::Opaque)
+    }
+
+    pub fn add_material_alpha(&mut self, albedo: &crate::texture::Texture, normal: &crate::texture::Texture, packed: &crate::texture::Texture, alpha_mode: AlphaMode) -> u16 {
         self.materials.push(SurfaceMaps {
+            alpha_mode,
             albedo: crate::mips::MipTexture::new(albedo),
             normal: crate::mips::MipTexture::new(normal),
             packed: crate::mips::MipTexture::new(packed),
         });
         self.materials.len() as u16
+    }
+
+    pub fn is_blended(&self, tri: &Tri) -> bool {
+        !tri.unlit && tri.material > 0 && self.materials.get(tri.material as usize - 1).map_or(false, |m| m.alpha_mode == AlphaMode::Blend)
+    }
+
+    pub fn alpha_mode_of(&self, tri: &Tri) -> AlphaMode {
+        if tri.unlit || tri.material == 0 {
+            return AlphaMode::Opaque;
+        }
+        self.materials.get(tri.material as usize - 1).map_or(AlphaMode::Opaque, |m| m.alpha_mode)
     }
 
     pub fn add_mesh(&mut self, mesh: &crate::model::mesh::Mesh) {

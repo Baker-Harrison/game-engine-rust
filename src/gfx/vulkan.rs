@@ -1,7 +1,7 @@
 
 #![allow(non_snake_case, non_camel_case_types, clippy::too_many_arguments)]
 
-use super::{build_dynamic_vertices, build_vertices, frame_uniforms, pack_materials, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
+use super::{build_dynamic_vertices, build_vertices, draw_counts, draw_plan, frame_uniforms, pack_materials, DrawRange, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
 use crate::camera::Camera;
 use crate::platform::{NativeHandle, Window};
 use crate::render::Framebuffer;
@@ -196,6 +196,9 @@ pub struct VulkanRenderer {
     render_pass: Handle,
     layout: Handle,
     pipeline: Handle,
+    blend_pipeline: Handle,
+    static_opaque: usize,
+    draws: Vec<DrawRange>,
     cmd: Ptr,
     fence: Handle,
     sem_acquire: Handle,
@@ -346,7 +349,7 @@ impl VulkanRenderer {
             (f.GetDeviceQueue)(device, family, 0, &mut queue);
 
             let mut r = VulkanRenderer {
-                f, sf, instance, device, queue, mem, render_pass: 0, layout: 0, pipeline: 0, cmd: std::ptr::null_mut(),
+                f, sf, instance, device, queue, mem, render_pass: 0, layout: 0, pipeline: 0, blend_pipeline: 0, static_opaque: 0, draws: Vec::new(), cmd: std::ptr::null_mut(),
                 fence: 0, sem_acquire: 0, sem_render: 0, vertex_buf: 0, vertex_mem: 0, vertex_capacity: 0, vertex_count: 0, dynamic_count: 0, vertex_mapped: std::ptr::null_mut(),
                 sampler: 0, set_layout: 0, descriptor_set: 0, material_images: Vec::new(),
                 target: Target::Offscreen { image: 0, framebuffer: 0, readback: 0, readback_mem: 0 }, w, h, device_name,
@@ -529,6 +532,14 @@ impl VulkanRenderer {
             layout: self.layout, render_pass: self.render_pass, subpass: 0, base: 0, base_index: -1,
         };
         chk!((self.f.CreateGraphicsPipelines)(self.device, 0, 1, &gpi, std::ptr::null(), &mut self.pipeline), "vkCreateGraphicsPipelines");
+        let ds_blend = DepthStencilState { s_type: 25, p_next: std::ptr::null(), flags: 0, test: 1, write: 0, compare: 1, bounds: 0, stencil: 0,
+            front: StencilOp::default(), back: StencilOp::default(), min_depth: 0.0, max_depth: 1.0 };
+        let gpi_blend = GraphicsPipelineCreateInfo {
+            s_type: 28, p_next: std::ptr::null(), flags: 0, stage_count: 2, stages: stages.as_ptr(), vertex: &vi, assembly: &ia,
+            tess: std::ptr::null(), viewport: &vps, raster: &rs, ms: &ms, ds: &ds_blend, blend: &bs, dynamic: std::ptr::null(),
+            layout: self.layout, render_pass: self.render_pass, subpass: 0, base: 0, base_index: -1,
+        };
+        chk!((self.f.CreateGraphicsPipelines)(self.device, 0, 1, &gpi_blend, std::ptr::null(), &mut self.blend_pipeline), "vkCreateGraphicsPipelines");
 
         let pi = CommandPoolCreateInfo { s_type: 39, p_next: std::ptr::null(), flags: 2, family };
         let mut pool = 0;
@@ -644,13 +655,21 @@ impl VulkanRenderer {
             area: Rect2D { x: 0, y: 0, w: self.w as u32, h: self.h as u32 }, clear_count: 2, clears: clears.as_ptr(),
         };
         (f.CmdBeginRenderPass)(self.cmd, &rb, 0);
-        if self.vertex_count + self.dynamic_count > 0 {
-            (f.CmdBindPipeline)(self.cmd, 0, self.pipeline);
+        if !self.draws.is_empty() {
             (f.CmdBindDescriptorSets)(self.cmd, 0, self.layout, 0, 1, &self.descriptor_set, 0, std::ptr::null());
             let off = 0u64;
             (f.CmdBindVertexBuffers)(self.cmd, 0, 1, &self.vertex_buf, &off);
             (f.CmdPushConstants)(self.cmd, self.layout, 0x11, 0, std::mem::size_of::<FrameUniforms>() as u32, u as *const FrameUniforms as *const c_void);
-            (f.CmdDraw)(self.cmd, self.vertex_count + self.dynamic_count, 1, 0, 0);
+            let mut bound = 0;
+            for range in &self.draws {
+                let wanted = if range.blend_pass { self.blend_pipeline } else { self.pipeline };
+                if wanted != bound {
+                    (f.CmdBindPipeline)(self.cmd, 0, wanted);
+                    bound = wanted;
+                }
+                let first = if range.dynamic { self.vertex_count as usize + range.first } else { range.first };
+                (f.CmdDraw)(self.cmd, range.count as u32, 1, first as u32, 0);
+            }
         }
         (f.CmdEndRenderPass)(self.cmd);
         if let (Some((image, buffer)), true) = (readback, true) {
@@ -678,6 +697,7 @@ impl Renderer for VulkanRenderer {
             self.upload_materials(arrays.as_ref())?;
             chk!((self.f.DeviceWaitIdle)(self.device), "vkDeviceWaitIdle");
             self.vertex_count = verts.len() as u32;
+            self.static_opaque = super::static_opaque_vertex_count(scene).min(verts.len());
             let bytes = ((verts.len() + MAX_DYNAMIC_VERTICES) * vertex_size) as u64;
             if bytes > self.vertex_capacity {
                 let (buf, mem) = self.alloc_buffer(bytes, 0x80)?;
@@ -759,9 +779,13 @@ impl VulkanRenderer {
         let vertex_size = std::mem::size_of::<Vertex>();
         if self.vertex_mapped.is_null() {
             self.dynamic_count = 0;
+            self.draws.clear();
             return;
         }
         self.dynamic_count = verts.len() as u32;
+        let mut counts = draw_counts(scene, self.vertex_count as usize, verts.len());
+        counts.static_opaque = self.static_opaque.min(self.vertex_count as usize);
+        self.draws = draw_plan(&counts);
         unsafe {
             let destination = self.vertex_mapped.add(self.vertex_count as usize * vertex_size);
             std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, destination, verts.len() * vertex_size);

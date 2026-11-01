@@ -119,3 +119,76 @@ fn gpu_textured_render_matches_cpu_reference() {
     let mean = total as f64 / (a.pixels.len() * 3) as f64;
     assert!(mean < 8.0, "mean channel difference {}", mean);
 }
+
+fn wall_scene(mode: engine::scene::AlphaMode, alpha_left: u8, alpha_right: u8) -> Scene {
+    let mut scene = floor_scene(&checker(4, [20, 160, 20, 255], [20, 160, 20, 255]), 8.0);
+    let mut albedo = Texture::new(8, 8);
+    for y in 0..8 {
+        for x in 0..8 {
+            albedo.set(x, y, [230, 230, 230, if x < 4 { alpha_left } else { alpha_right }]);
+        }
+    }
+    let material = scene.add_material_alpha(&albedo, &flat_normal(8), &packed(8, 200), mode);
+    let corners = [Vec3::new(-2.0, 0.0, 4.0), Vec3::new(2.0, 0.0, 4.0), Vec3::new(2.0, 3.0, 4.0), Vec3::new(-2.0, 3.0, 4.0)];
+    let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    for indices in [[0usize, 1, 2], [0, 2, 3]] {
+        let mut tri = Tri::flat(indices.map(|i| corners[i]), Vec3::new(1.0, 1.0, 1.0));
+        tri.n = [Vec3::new(0.0, 0.0, -1.0); 3];
+        tri.t = indices.map(|i| uvs[i]);
+        tri.material = material;
+        scene.tris.push(tri);
+    }
+    scene
+}
+
+fn channels(pixel: u32) -> (u32, u32, u32) {
+    ((pixel >> 16) & 255, (pixel >> 8) & 255, pixel & 255)
+}
+
+fn wall_camera() -> Camera {
+    Camera::look_at(Vec3::new(0.0, 1.5, -2.0), Vec3::new(0.0, 1.2, 4.0), 70.0)
+}
+
+#[test]
+fn cutout_discards_transparent_texels_and_blend_mixes_with_background() {
+    let camera = wall_camera();
+    let (w, h) = (320, 200);
+    let mut cut = Framebuffer::new(w, h);
+    render(&wall_scene(engine::scene::AlphaMode::Cutout, 255, 0), &camera, &mut cut);
+    let (left, right) = (channels(cut.pixels[90 * w + 190]), channels(cut.pixels[90 * w + 130]));
+    assert!(left.0 > 100 && left.2 > 100, "solid half should be pale grey {:?}", left);
+    assert!(right.2 > left.2 + 30 || right.0 + 30 < left.0, "cut half should show the green floor/sky behind {:?}", right);
+
+    let mut glass = Framebuffer::new(w, h);
+    render(&wall_scene(engine::scene::AlphaMode::Blend, 255, 60), &camera, &mut glass);
+    let (opaque, clear) = (channels(glass.pixels[90 * w + 190]), channels(glass.pixels[90 * w + 130]));
+    let behind = channels(cut.pixels[90 * w + 130]);
+    assert!(opaque.0 > 100, "{:?}", opaque);
+    assert!(clear.0 < behind.0 && clear.0 > opaque.0, "glass should sit between background {:?} and pane {:?}: {:?}", behind, opaque, clear);
+}
+
+#[test]
+fn gpu_alpha_matches_cpu_reference() {
+    let name = if cfg!(target_os = "macos") { "metal" } else { "vulkan" };
+    let (w, h) = (320, 200);
+    for mode in [engine::scene::AlphaMode::Cutout, engine::scene::AlphaMode::Blend] {
+        let scene = wall_scene(mode, 255, 70);
+        let mut cpu = engine::gfx::create_headless("cpu", w, h).unwrap();
+        let mut gpu = match engine::gfx::create_headless(name, w, h) {
+            Ok(gpu) => gpu,
+            Err(e) if e.contains("no Vulkan") || e.contains("no Metal") => return,
+            Err(e) => panic!("{} failed to start: {}", name, e),
+        };
+        cpu.upload_scene(&scene).unwrap();
+        gpu.upload_scene(&scene).unwrap();
+        let a = cpu.render_offscreen(&scene, &wall_camera()).unwrap();
+        let b = gpu.render_offscreen(&scene, &wall_camera()).unwrap();
+        let mut total = 0u64;
+        for (x, y) in a.pixels.iter().zip(&b.pixels) {
+            let (p, q) = (channels(*x), channels(*y));
+            total += (p.0 as i64 - q.0 as i64).unsigned_abs() + (p.1 as i64 - q.1 as i64).unsigned_abs() + (p.2 as i64 - q.2 as i64).unsigned_abs();
+        }
+        let mean = total as f64 / (a.pixels.len() * 3) as f64;
+        assert!(mean < 8.0, "{:?}: mean channel difference {}", mode, mean);
+    }
+}

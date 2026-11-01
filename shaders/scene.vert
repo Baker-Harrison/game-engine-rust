@@ -17,6 +17,7 @@ layout(location = 3) out float depth;
 layout(location = 4) out float kind;
 layout(location = 5) out vec2 uv;
 layout(location = 6) flat out float layer;
+layout(location = 7) flat out float mode;
 void main() {
     vec4 p = u.view_proj * vec4(pos.xyz, 1.0);
     if (normal.w > 1.5) {
@@ -30,4 +31,5 @@ void main() {
     kind = normal.w;
     uv = uvm.xy;
     layer = uvm.z;
+    mode = uvm.w;
 }

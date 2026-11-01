@@ -16,6 +16,7 @@ layout(location = 3) in float depth;
 layout(location = 4) in float kind;
 layout(location = 5) in vec2 uv;
 layout(location = 6) flat in float layer;
+layout(location = 7) flat in float mode;
 layout(location = 0) out vec4 out_color;
 void main() {
     if (kind > 1.5) {
@@ -29,6 +30,7 @@ void main() {
     float roughness = 0.85;
     float metallic = 0.0;
     float occlusion = 1.0;
+    float alpha = 1.0;
     bool textured = layer > 0.5 && kind < 0.5;
     if (textured) {
         float slice = layer - 1.0;
@@ -44,7 +46,10 @@ void main() {
         vec3 texel_normal = texture(normal_tex, vec3(uv, slice)).xyz * 2.0 - 1.0;
         vec3 perturbed = tangent * inverse_scale * texel_normal.x + bitangent * inverse_scale * texel_normal.y + n * texel_normal.z;
         if (dot(perturbed, perturbed) > 1e-8) n = normalize(perturbed);
-        base = texture(albedo_tex, vec3(uv, slice)).xyz;
+        vec4 albedo = texture(albedo_tex, vec3(uv, slice));
+        base = albedo.xyz;
+        if (mode > 0.5 && mode < 1.5 && albedo.a < 0.5) discard;
+        if (mode > 1.5) alpha = albedo.a;
         vec3 surface = texture(packed_tex, vec3(uv, slice)).xyz;
         roughness = max(surface.x, 0.04);
         metallic = surface.y;
@@ -66,5 +71,5 @@ void main() {
     }
     float t = clamp(depth / u.params.x, 0.0, 1.0);
     t = t * t;
-    out_color = vec4(mix(lit, u.sky.xyz, t), 1.0);
+    out_color = vec4(mix(lit, u.sky.xyz, t), alpha);
 }
