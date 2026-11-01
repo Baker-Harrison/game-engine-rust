@@ -15,6 +15,35 @@ pub struct AssetDefinition {
 pub fn definitions() -> Vec<AssetDefinition> {
     vec![
         AssetDefinition {
+            name: "manor",
+            summary: "two-storey gabled manor with arched door, reveals, eaves cornice and slate roof",
+            parameters: &[("width", 9.0), ("depth", 6.0), ("storeys", 2.0), ("windows", 3.0), ("pitch", 38.0)],
+            build: |p| {
+                let spec = crate::model::building::BuildingSpec {
+                    width: p.get("width"),
+                    depth: p.get("depth"),
+                    storeys: p.get("storeys") as usize,
+                    windows_per_storey: p.get("windows") as usize,
+                    roof_pitch_degrees: p.get("pitch"),
+                };
+                crate::model::building::build_building(&spec, &crate::model::style::Style::overgrown_manor()).unwrap_or_else(|error| panic!("{}", error))
+            },
+        },
+        AssetDefinition {
+            name: "terrace",
+            summary: "stone terrace with balustrade, columns, arched wall, cornice and iron gate",
+            parameters: &[],
+            build: |_| {
+                crate::model::terrace::build_terrace(&crate::model::style::Style::overgrown_manor()).unwrap_or_else(|error| panic!("{}", error))
+            },
+        },
+        AssetDefinition {
+            name: "swatches",
+            summary: "one block per material in the overgrown_manor style",
+            parameters: &[("cell", 0.012)],
+            build: |p| crate::model::style::build_swatches(&crate::model::style::Style::overgrown_manor(), p.get("cell")),
+        },
+        AssetDefinition {
             name: "chair",
             summary: "dining chair with raked back, slats and tapered legs",
             parameters: &[
