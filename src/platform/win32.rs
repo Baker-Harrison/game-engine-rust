@@ -148,6 +148,7 @@ pub struct WinWindow {
     w: usize,
     h: usize,
     captured: bool,
+    scale: f32,
 }
 
 impl WinWindow {
