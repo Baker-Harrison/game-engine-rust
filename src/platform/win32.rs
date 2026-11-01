@@ -1,12 +1,9 @@
-//! Windows backend: raw FFI to user32/gdi32/kernel32. Pixels are shown with
-//! StretchDIBits. Keys and buttons are polled with GetAsyncKeyState, and mouse
-//! look re-centers the cursor each frame.
 
 use super::{NativeHandle, Window};
-use crate::input::Input;
+use crate::input::{Button, Input, Key};
 use crate::render::Framebuffer;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 type Hwnd = *mut c_void;
 
@@ -102,10 +99,39 @@ const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 const SRCCOPY: u32 = 0x00CC_0020;
 
 static CLOSED: AtomicBool = AtomicBool::new(false);
+static WHEEL_STEPS: AtomicI32 = AtomicI32::new(0);
+const WM_MOUSEWHEEL: u32 = 0x020A;
+
+fn virtual_key(key: Key) -> i32 {
+    match key {
+        Key::Space => 0x20,
+        Key::Shift => 0x10,
+        Key::Control => 0x11,
+        Key::Alt => 0x12,
+        Key::Tab => 0x09,
+        Key::Escape => 0x1B,
+        Key::Enter => 0x0D,
+        Key::Backspace => 0x08,
+        Key::Left => 0x25,
+        Key::Up => 0x26,
+        Key::Right => 0x27,
+        Key::Down => 0x28,
+        Key::F1 => 0x70,
+        Key::F2 => 0x71,
+        Key::F3 => 0x72,
+        Key::F4 => 0x73,
+        other => other.name().to_ascii_uppercase().as_bytes()[0] as i32,
+    }
+}
 
 unsafe extern "system" fn wnd_proc(h: Hwnd, m: u32, w: usize, l: isize) -> isize {
     if m == WM_CLOSE {
         CLOSED.store(true, Ordering::SeqCst);
+        return 0;
+    }
+    if m == WM_MOUSEWHEEL {
+        let delta = ((w >> 16) as u16 as i16) as i32;
+        WHEEL_STEPS.fetch_add(delta / 120, Ordering::SeqCst);
         return 0;
     }
     DefWindowProcW(h, m, w, l)
@@ -120,8 +146,6 @@ pub struct WinWindow {
     w: usize,
     h: usize,
     captured: bool,
-    tab_prev: bool,
-    click_prev: bool,
 }
 
 impl WinWindow {
@@ -153,7 +177,7 @@ impl WinWindow {
             if hwnd.is_null() {
                 return Err("CreateWindowExW failed".into());
             }
-            Ok(WinWindow { hwnd, w, h, captured: false, tab_prev: false, click_prev: false })
+            Ok(WinWindow { hwnd, w, h, captured: false })
         }
     }
 
@@ -178,20 +202,13 @@ impl Window for WinWindow {
             }
             let focused = GetForegroundWindow() == self.hwnd;
             if focused {
-                input.forward = down(b'W' as i32) || down(0x26);
-                input.back = down(b'S' as i32) || down(0x28);
-                input.left = down(b'A' as i32) || down(0x25);
-                input.right = down(b'D' as i32) || down(0x27);
-                input.sprint = down(0x10);
-                if down(0x1B) {
-                    input.quit = true;
+                for key in Key::ALL {
+                    input.set_key(*key, down(virtual_key(*key)));
                 }
-                let tab = down(0x09);
-                input.toggle_capture |= tab && !self.tab_prev;
-                self.tab_prev = tab;
-                let click = down(0x01) || down(0x02);
-                input.click |= click && !self.click_prev;
-                self.click_prev = click;
+                input.set_button(Button::Left, down(0x01));
+                input.set_button(Button::Right, down(0x02));
+                input.set_button(Button::Middle, down(0x04));
+                input.wheel += WHEEL_STEPS.swap(0, Ordering::SeqCst) as f32;
                 if self.captured {
                     let (cx, cy) = self.center_screen();
                     let mut p = Point::default();
@@ -201,11 +218,7 @@ impl Window for WinWindow {
                     SetCursorPos(cx, cy);
                 }
             } else {
-                input.forward = false;
-                input.back = false;
-                input.left = false;
-                input.right = false;
-                input.sprint = false;
+                input.release_all();
                 if self.captured {
                     self.set_capture(false);
                     input.capture_lost = true;
@@ -220,7 +233,7 @@ impl Window for WinWindow {
             let hdr = BitmapInfoHeader {
                 size: std::mem::size_of::<BitmapInfoHeader>() as u32,
                 width: fb.width as i32,
-                height: -(fb.height as i32), // top-down
+                height: -(fb.height as i32),
                 planes: 1,
                 bit_count: 32,
                 compression: 0,

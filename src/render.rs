@@ -1,10 +1,7 @@
-//! Software rasterizer: near-plane clipping, perspective-correct depth,
-//! z-buffer, flat shading with a directional sun, and distance fog.
-//! Pixels are 0x00RRGGBB.
 
 use crate::camera::Camera;
 use crate::math::{clamp, Vec3};
-use crate::scene::Scene;
+use crate::scene::{OverlayRect, Scene};
 use std::io::Write;
 
 #[derive(Clone)]
@@ -12,7 +9,7 @@ pub struct Framebuffer {
     pub width: usize,
     pub height: usize,
     pub pixels: Vec<u32>,
-    depth: Vec<f32>, // stores 1/z; larger is nearer, 0 is infinitely far
+    depth: Vec<f32>,
 }
 
 impl Framebuffer {
@@ -46,7 +43,6 @@ impl Framebuffer {
         self.depth.iter_mut().for_each(|d| *d = 0.0);
     }
 
-    /// Writes a binary PPM (P6) that agents can open or convert.
     pub fn write_ppm(&self, path: &str) -> std::io::Result<()> {
         let mut out = Vec::with_capacity(self.pixels.len() * 3 + 32);
         write!(out, "P6\n{} {}\n255\n", self.width, self.height)?;
@@ -115,7 +111,7 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
         }
     };
 
-    for tri in &scene.tris {
+    for tri in scene.tris.iter().chain(scene.dynamic.iter()) {
         let [a, b, c] = tri.v;
         let facing_away = (b - a).cross(c - a).dot(cam.pos - a) < 0.0;
         let normal_sign = if facing_away { -1.0 } else { 1.0 };
@@ -150,9 +146,33 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
         }
         let first = project(polygon[0]);
         for i in 1..count - 1 {
-            raster(fb, first, project(polygon[i]), project(polygon[i + 1]), view_sun(right, up, forward), scene.sky, scene.fog);
+            raster(fb, first, project(polygon[i]), project(polygon[i + 1]), view_sun(right, up, forward), scene.sky, scene.fog, tri.unlit);
         }
     }
+    draw_overlay(fb, &scene.overlay);
+}
+
+fn draw_overlay(fb: &mut Framebuffer, rects: &[OverlayRect]) {
+    let (width, height) = (fb.width as f32, fb.height as f32);
+    for rect in rects {
+        let x0 = (rect.min.0 * width).round().max(0.0) as usize;
+        let x1 = ((rect.max.0 * width).round().max(0.0) as usize).min(fb.width);
+        let y0 = (rect.min.1 * height).round().max(0.0) as usize;
+        let y1 = ((rect.max.1 * height).round().max(0.0) as usize).min(fb.height);
+        let top = pack(rect.color);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let index = y * fb.width + x;
+                fb.pixels[index] = if rect.alpha >= 0.999 { top } else { blend(fb.pixels[index], rect.color, rect.alpha) };
+            }
+        }
+    }
+}
+
+fn blend(under: u32, over: Vec3, alpha: f32) -> u32 {
+    let channel = |shift: u32| ((under >> shift) & 255) as f32 / 255.0;
+    let below = Vec3::new(channel(16), channel(8), channel(0));
+    pack(below.lerp(over, alpha))
 }
 
 fn view_sun(right: Vec3, up: Vec3, forward: Vec3) -> Vec3 {
@@ -160,7 +180,7 @@ fn view_sun(right: Vec3, up: Vec3, forward: Vec3) -> Vec3 {
     Vec3::new(sun.dot(right), sun.dot(up), sun.dot(forward))
 }
 
-fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVertex, sun: Vec3, sky: Vec3, fog: f32) {
+fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVertex, sun: Vec3, sky: Vec3, fog: f32, unlit: bool) {
     let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if area.abs() < 1e-8 {
         return;
@@ -191,7 +211,7 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
             fb.depth[idx] = inv_z;
             let normal = (a.normal_over_z * w0 + b.normal_over_z * w1 + c.normal_over_z * w2) / inv_z;
             let base = (a.color_over_z * w0 + b.color_over_z * w1 + c.color_over_z * w2) / inv_z;
-            let shade = AMBIENT + (1.0 - AMBIENT) * normal.normalized().dot(sun).max(0.0);
+            let shade = if unlit { 1.0 } else { AMBIENT + (1.0 - AMBIENT) * normal.normalized().dot(sun).max(0.0) };
             let t = clamp(1.0 / inv_z / fog, 0.0, 1.0);
             let t = t * t;
             fb.pixels[idx] = pack((base * shade).lerp(sky, t));
