@@ -36,6 +36,9 @@ fn real_main(args: &[String]) -> Result<(), String> {
         println!("{}", HELP);
         return Ok(());
     }
+    if cmd == "textures" {
+        return textures_command(&args[1..]);
+    }
     if cmd == "asset" || cmd == "inspect" {
         return asset_command(cmd, &args[1..]);
     }
@@ -118,6 +121,46 @@ fn real_main(args: &[String]) -> Result<(), String> {
     } else {
         app::run(scene, width, height, renderer, max_frames)
     }
+}
+
+fn textures_command(rest: &[String]) -> Result<(), String> {
+    let mut out: Option<&str> = None;
+    let mut size = 256usize;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--out" => {
+                i += 1;
+                out = Some(rest.get(i).ok_or("--out needs a value")?);
+            }
+            "--size" => {
+                i += 1;
+                size = rest.get(i).ok_or("--size needs a value")?.parse().map_err(|_| "bad --size")?;
+            }
+            other => return Err(format!("unknown argument {}", other)),
+        }
+        i += 1;
+    }
+    let out = out.ok_or("textures needs --out DIR")?;
+    std::fs::create_dir_all(out).map_err(|e| format!("{}: {}", out, e))?;
+    let style = engine::model::style::Style::overgrown_manor();
+    let names: Vec<String> = style.materials.keys().cloned().collect();
+    let mut sheet = engine::render::Framebuffer::new(size * 3, size * names.len());
+    for (row, name) in names.iter().enumerate() {
+        let maps = style.bake_material_maps(name, size)?;
+        for (column, texture) in [&maps.albedo, &maps.normal, &maps.packed].into_iter().enumerate() {
+            for y in 0..size {
+                for x in 0..size {
+                    let t = texture.get(x, y);
+                    sheet.pixels[(row * size + y) * size * 3 + column * size + x] = ((t[0] as u32) << 16) | ((t[1] as u32) << 8) | t[2] as u32;
+                }
+            }
+        }
+    }
+    let path = format!("{}/material_maps.png", out);
+    engine::png::write(&sheet, &path)?;
+    println!("wrote {} ({} materials: albedo, normal, packed)", path, names.len());
+    Ok(())
 }
 
 fn write_framebuffer(fb: &engine::render::Framebuffer, path: &str) -> Result<(), String> {

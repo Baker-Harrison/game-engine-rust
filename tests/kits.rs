@@ -153,3 +153,29 @@ fn stairs_follow_rise_and_run_rules() {
     let awkward = StairSpec { total_rise: 3.0, width: 1.2, run: 0.5 };
     assert!(stairs(&awkward).err().unwrap().contains("comfort"));
 }
+
+use engine::texture::Texture;
+
+#[test]
+fn baked_maps_tile_seamlessly_and_match_requested_size() {
+    let style = Style::overgrown_manor();
+    let maps = style.bake_material_maps("stone_wall", 64).unwrap();
+    assert_eq!(maps.albedo.texels.len(), 64 * 64);
+    let max_step = |texture: &Texture, wrap: bool| {
+        let mut worst = 0i32;
+        for y in 0..64 {
+            let (a, b) = if wrap { (texture.get(63, y), texture.get(0, y)) } else { (texture.get(31, y), texture.get(32, y)) };
+            worst = worst.max((a[0] as i32 - b[0] as i32).abs());
+        }
+        worst
+    };
+    let seam = max_step(&maps.albedo, true);
+    let interior = max_step(&maps.albedo, false);
+    assert!(seam <= interior.max(24) + 8, "seam {} interior {}", seam, interior);
+    assert!(maps.packed.get(10, 10)[0] > 100);
+}
+
+#[test]
+fn unknown_material_cannot_be_baked() {
+    assert!(Style::overgrown_manor().bake_material_maps("granite", 16).is_err());
+}

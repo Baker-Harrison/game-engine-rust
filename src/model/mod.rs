@@ -18,4 +18,5 @@ pub mod stats;
 pub mod style;
 pub mod stylized;
 pub mod terrace;
+pub mod texture_bake;
 pub mod validate;
