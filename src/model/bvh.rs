@@ -30,12 +30,17 @@ type IndexedTriangle = (u32, [Vec3; 3]);
 
 impl Bvh {
     pub fn from_meshes(meshes: &[&Mesh]) -> Bvh {
-        let mut triangles: Vec<IndexedTriangle> = Vec::new();
+        let mut triangles = Vec::new();
         for mesh in meshes {
             for index in 0..mesh.triangle_count() {
-                triangles.push((triangles.len() as u32, mesh.triangle(index)));
+                triangles.push(mesh.triangle(index));
             }
         }
+        Bvh::from_triangles(triangles)
+    }
+
+    pub fn from_triangles(list: Vec<[Vec3; 3]>) -> Bvh {
+        let mut triangles: Vec<IndexedTriangle> = list.into_iter().enumerate().map(|(index, triangle)| (index as u32, triangle)).collect();
         let mut bvh = Bvh { nodes: Vec::new(), triangles: Vec::new(), triangle_ids: Vec::new() };
         if !triangles.is_empty() {
             let count = triangles.len();
