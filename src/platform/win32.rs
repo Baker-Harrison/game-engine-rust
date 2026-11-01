@@ -64,6 +64,8 @@ extern "system" {
     fn RegisterClassW(c: *const WndClassW) -> u16;
     fn CreateWindowExW(ex: u32, class: *const u16, title: *const u16, style: u32, x: i32, y: i32, w: i32, h: i32, parent: Hwnd, menu: *mut c_void, inst: *mut c_void, param: *mut c_void) -> Hwnd;
     fn DefWindowProcW(h: Hwnd, m: u32, w: usize, l: isize) -> isize;
+    fn SetProcessDPIAware() -> i32;
+    fn GetDpiForSystem() -> u32;
     fn PeekMessageW(msg: *mut Msg, h: Hwnd, min: u32, max: u32, remove: u32) -> i32;
     fn TranslateMessage(msg: *const Msg) -> i32;
     fn DispatchMessageW(msg: *const Msg) -> isize;
@@ -146,11 +148,16 @@ pub struct WinWindow {
     w: usize,
     h: usize,
     captured: bool,
+    scale: f32,
 }
 
 impl WinWindow {
     pub fn new(title: &str, w: usize, h: usize) -> Result<WinWindow, String> {
         unsafe {
+            SetProcessDPIAware();
+            let dpi = GetDpiForSystem();
+            let scale = if dpi >= 96 { dpi as f32 / 96.0 } else { 1.0 };
+            let (w, h) = ((w as f32 * scale).round() as usize, (h as f32 * scale).round() as usize);
             let inst = GetModuleHandleW(std::ptr::null());
             let class = wide("EngineWindow");
             let wc = WndClassW {
@@ -177,7 +184,7 @@ impl WinWindow {
             if hwnd.is_null() {
                 return Err("CreateWindowExW failed".into());
             }
-            Ok(WinWindow { hwnd, w, h, captured: false })
+            Ok(WinWindow { hwnd, w, h, captured: false, scale })
         }
     }
 
@@ -252,6 +259,10 @@ impl Window for WinWindow {
 
     fn native_handle(&self) -> NativeHandle {
         NativeHandle::Win32(self.hwnd)
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale
     }
 
     fn size(&self) -> (usize, usize) {

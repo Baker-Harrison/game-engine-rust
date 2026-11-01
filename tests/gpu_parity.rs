@@ -1,7 +1,7 @@
 use engine::camera::Camera;
 use engine::gfx;
 use engine::math::Vec3;
-use engine::scene::{OverlayRect, Scene, Tri};
+use engine::scene::{OverlayItem, OverlayRect, Scene, Tri};
 
 fn channel_diff(a: u32, b: u32) -> u32 {
     (0..3)
@@ -14,8 +14,8 @@ fn check_backend(name: &str) {
     let mut scene = Scene::parse(include_str!("../scenes/default.scene")).unwrap();
     scene.dynamic.push(Tri::flat([Vec3::new(-1.0, 0.2, 5.0), Vec3::new(1.0, 0.2, 5.0), Vec3::new(0.0, 2.0, 5.0)], Vec3::new(0.9, 0.3, 0.2)));
     scene.dynamic.push(Tri::glowing([Vec3::new(2.0, 0.2, 4.0), Vec3::new(3.5, 0.2, 4.0), Vec3::new(2.75, 1.6, 4.0)], Vec3::new(1.0, 0.9, 0.2)));
-    scene.overlay.push(OverlayRect { min: (0.1, 0.1), max: (0.4, 0.3), color: Vec3::new(0.1, 0.1, 0.1), alpha: 1.0 });
-    scene.overlay.push(OverlayRect { min: (0.2, 0.2), max: (0.6, 0.5), color: Vec3::new(1.0, 0.2, 0.2), alpha: 0.5 });
+    scene.overlay.push(OverlayItem::Rect(OverlayRect { min: (0.1, 0.1), max: (0.4, 0.3), color: Vec3::new(0.1, 0.1, 0.1), alpha: 1.0 }));
+    scene.overlay.push(OverlayItem::Rect(OverlayRect { min: (0.2, 0.2), max: (0.6, 0.5), color: Vec3::new(1.0, 0.2, 0.2), alpha: 0.5 }));
     let views = [
         (Vec3::new(0.0, 1.7, 9.0), 0.0f32, 0.0f32),
         (Vec3::new(-3.0, 1.7, 2.0), 40.0, -5.0),

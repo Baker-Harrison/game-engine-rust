@@ -95,6 +95,7 @@ pub struct MacWindow {
     captured: bool,
     cursor_hidden: bool,
     size: (usize, usize),
+    scale: f32,
 }
 
 impl MacWindow {
@@ -118,11 +119,25 @@ impl MacWindow {
             send!((); window, "center");
             let view = send!(Id; window, "contentView");
             send!((); view, "setWantsLayer:", bool = true);
+            let reported = send!(f64; window, "backingScaleFactor") as f32;
+            let scale = if reported.is_finite() && reported >= 1.0 { reported } else { 1.0 };
+            let layer = send!(Id; view, "layer");
+            if !layer.is_null() {
+                send!((); layer, "setContentsScale:", f64 = scale as f64);
+            }
             send!((); window, "makeKeyAndOrderFront:", Id = std::ptr::null_mut());
             send!((); app, "activateIgnoringOtherApps:", bool = true);
             send!((); app, "finishLaunching");
             objc_autoreleasePoolPop(pool);
-            Ok(MacWindow { app, window, view, captured: false, cursor_hidden: false, size: (w, h) })
+            Ok(MacWindow {
+                app,
+                window,
+                view,
+                captured: false,
+                cursor_hidden: false,
+                size: ((w as f32 * scale).round() as usize, (h as f32 * scale).round() as usize),
+                scale,
+            })
         }
     }
 }
@@ -208,6 +223,10 @@ impl Window for MacWindow {
 
     fn size(&self) -> (usize, usize) {
         self.size
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale
     }
 
     fn set_capture(&mut self, on: bool) {

@@ -20,6 +20,9 @@ pub trait Window {
         NativeHandle::None
     }
     fn size(&self) -> (usize, usize);
+    fn scale_factor(&self) -> f32 {
+        1.0
+    }
 }
 
 #[cfg(target_os = "macos")]

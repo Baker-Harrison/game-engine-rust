@@ -16,6 +16,8 @@ USAGE:
   engine asset list
   engine asset NAME [key=value ...] [--obj FILE.obj]
   engine inspect NAME [key=value ...] --out DIR
+  engine check  NAME [key=value ...]
+  engine probe  NAME [key=value ...] [--json] [--out FILE]
   engine help
 
 `run` opens a window: WASD move, mouse look, Shift sprint, Tab toggles mouse
@@ -53,7 +55,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
     if cmd == "textures" {
         return textures_command(&args[1..]);
     }
-    if cmd == "asset" || cmd == "inspect" {
+    if cmd == "asset" || cmd == "inspect" || cmd == "probe" || cmd == "check" {
         return asset_command(cmd, &args[1..]);
     }
     if !matches!(cmd, "run" | "render") {
@@ -201,6 +203,7 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
     let mut overrides = Vec::new();
     let mut out: Option<&str> = None;
     let mut obj: Option<&str> = None;
+    let mut json = false;
     let mut quality_name = "fast";
     let mut samples_per_pixel = 16usize;
     let mut i = 1;
@@ -210,6 +213,7 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
                 i += 1;
                 out = Some(rest.get(i).ok_or("--out needs a value")?);
             }
+            "--json" => json = true,
             "--quality" => {
                 i += 1;
                 quality_name = rest.get(i).ok_or("--quality needs a value")?;
@@ -227,6 +231,30 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
         i += 1;
     }
     let asset = engine::assets::build(name, &overrides)?;
+    if command == "check" {
+        let validation = engine::model::validate::validate(&asset);
+        let validation_errors: Vec<String> = validation.iter().filter(|f| f.severity == engine::model::validate::Severity::Error).map(|f| f.format()).collect();
+        let views = if asset.views.is_empty() { engine::inspect::automatic_views(&asset) } else { asset.views.clone() };
+        let scene = engine::probe::ProbeScene::from_asset(&asset, views);
+        let report = engine::probe::run(&scene, &engine::probe::targets::Targets::default());
+        for line in &validation_errors {
+            println!("{}", line);
+        }
+        println!("{}", report.text());
+        let total = validation_errors.len() + report.error_count();
+        return if total > 0 { Err(format!("{} check errors", total)) } else { println!("check passed"); Ok(()) };
+    }
+    if command == "probe" {
+        let views = if asset.views.is_empty() { engine::inspect::automatic_views(&asset) } else { asset.views.clone() };
+        let scene = engine::probe::ProbeScene::from_asset(&asset, views);
+        let report = engine::probe::run(&scene, &engine::probe::targets::Targets::default());
+        let text = if json { report.json() } else { report.text() };
+        match out {
+            Some(path) => std::fs::write(path, &text).map_err(|e| format!("{}: {}", path, e))?,
+            None => println!("{}", text),
+        }
+        return if report.error_count() > 0 { Err(format!("{} probe errors", report.error_count())) } else { Ok(()) };
+    }
     if command == "inspect" {
         let out = out.ok_or("inspect needs --out DIR")?;
         let quality = match quality_name {
