@@ -1,6 +1,7 @@
 use engine::math::Vec3;
 use engine::model::mesh::Mesh;
-use engine::model::mesher::{mesh_sdf, mesh_sdf_painted, SurfaceSample};
+use engine::model::material::SurfaceSample;
+use engine::model::mesher::{mesh_sdf, mesh_sdf_painted};
 use engine::model::sdf::Sdf;
 use engine::noise::fractal_noise;
 

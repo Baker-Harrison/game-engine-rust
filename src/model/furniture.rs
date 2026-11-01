@@ -1,3 +1,4 @@
+use crate::model::material::{Fabric, WoodGrain};
 use super::part::{Asset, Dimension, Member, Part, PartKind};
 use super::sdf::Sdf;
 use crate::math::Vec3;
@@ -164,8 +165,8 @@ pub fn build_chair(spec: &ChairSpec) -> Asset {
     let seat_member = Member::from_sdf("seat", &seat, false);
 
     let mut asset = Asset::new("chair");
-    asset.parts.push(Part::from_sdf("frame", PartKind::Object, &frame, spec.cell, WOOD, members));
-    asset.parts.push(Part::from_sdf("seat", PartKind::Object, &seat, spec.cell, FABRIC_BLUE, vec![seat_member]));
+    asset.parts.push(Part::from_sdf_surface("frame", PartKind::Object, &frame, spec.cell, &wood(WOOD, 1), members));
+    asset.parts.push(Part::from_sdf_surface("seat", PartKind::Object, &seat, spec.cell, &fabric(FABRIC_BLUE, 3), vec![seat_member]));
     asset.dimensions = vec![
         Dimension::new("chair", "seat height", spec.seat_height, 0.40, 0.50),
         Dimension::new("chair", "seat width", spec.seat_width, 0.38, 0.52),
@@ -218,9 +219,9 @@ pub fn build_stool(spec: &StoolSpec) -> Asset {
     }
     let frame = Sdf::smooth_union_all(limbs, SMOOTH_JOINT);
     let mut asset = Asset::new("stool");
-    asset.parts.push(Part::from_sdf("frame", PartKind::Object, &frame, spec.cell, DARK_WOOD, members));
+    asset.parts.push(Part::from_sdf_surface("frame", PartKind::Object, &frame, spec.cell, &wood(DARK_WOOD, 2), members));
     let seat_member = Member::from_sdf("seat", &seat, false);
-    asset.parts.push(Part::from_sdf("seat", PartKind::Object, &seat, spec.cell, FABRIC_BLUE, vec![seat_member]));
+    asset.parts.push(Part::from_sdf_surface("seat", PartKind::Object, &seat, spec.cell, &fabric(FABRIC_BLUE, 3), vec![seat_member]));
     asset.dimensions = vec![
         Dimension::new("stool", "seat height", spec.seat_height, 0.45, 0.80),
         Dimension::new("stool", "seat diameter", spec.seat_radius * 2.0, 0.28, 0.45),
@@ -266,9 +267,9 @@ pub fn build_table(spec: &TableSpec) -> Asset {
     }
     let frame = Sdf::smooth_union_all(limbs, SMOOTH_JOINT);
     let mut asset = Asset::new("table");
-    asset.parts.push(Part::from_sdf("frame", PartKind::Object, &frame, spec.cell, WOOD, members));
+    asset.parts.push(Part::from_sdf_surface("frame", PartKind::Object, &frame, spec.cell, &wood(WOOD, 1), members));
     let top_member = Member::from_sdf("top", &top, false);
-    asset.parts.push(Part::from_sdf("top", PartKind::Object, &top, spec.cell, DARK_WOOD, vec![top_member]));
+    asset.parts.push(Part::from_sdf_surface("top", PartKind::Object, &top, spec.cell, &wood(DARK_WOOD, 2), vec![top_member]));
     asset.dimensions = vec![
         Dimension::new("table", "height", spec.height, 0.72, 0.76),
         Dimension::new("table", "width", spec.width, 0.80, 2.60),
@@ -330,13 +331,13 @@ pub fn build_bed(spec: &BedSpec) -> Asset {
     let pillows = pillow_shape(-spec.width * 0.25, 2.0).union(pillow_shape(spec.width * 0.25, -3.0));
 
     let mut asset = Asset::new("bed");
-    asset.parts.push(Part::from_sdf("frame", PartKind::Object, &frame, spec.cell, DARK_WOOD, members));
+    asset.parts.push(Part::from_sdf_surface("frame", PartKind::Object, &frame, spec.cell, &wood(DARK_WOOD, 2), members));
     let mattress_member = Member::from_sdf("mattress", &mattress, false);
-    asset.parts.push(Part::from_sdf("mattress", PartKind::Object, &mattress, spec.cell, LINEN, vec![mattress_member]));
+    asset.parts.push(Part::from_sdf_surface("mattress", PartKind::Object, &mattress, spec.cell, &fabric(LINEN, 4), vec![mattress_member]));
     let duvet_member = Member::from_sdf("duvet", &duvet, false);
-    asset.parts.push(Part::from_sdf("duvet", PartKind::Object, &duvet, spec.cell, DUVET_GREY, vec![duvet_member]));
+    asset.parts.push(Part::from_sdf_surface("duvet", PartKind::Object, &duvet, spec.cell, &fabric(DUVET_GREY, 5), vec![duvet_member]));
     let pillow_member = Member::from_sdf("pillows", &pillows, false);
-    asset.parts.push(Part::from_sdf("pillows", PartKind::Object, &pillows, spec.cell, LINEN, vec![pillow_member]));
+    asset.parts.push(Part::from_sdf_surface("pillows", PartKind::Object, &pillows, spec.cell, &fabric(LINEN, 4), vec![pillow_member]));
     asset.dimensions = vec![
         Dimension::new("bed", "mattress top height", spec.mattress_top, 0.45, 0.65),
         Dimension::new("bed", "mattress width", spec.width, 0.90, 2.00),
@@ -388,7 +389,7 @@ pub fn build_shelf(spec: &ShelfSpec) -> Asset {
         Member::from_sdf("carcass", &carcass, true),
     ];
     let mut asset = Asset::new("shelf");
-    asset.parts.push(Part::from_sdf("carcass", PartKind::Object, &carcass, spec.cell, WOOD, members));
+    asset.parts.push(Part::from_sdf_surface("carcass", PartKind::Object, &carcass, spec.cell, &wood(WOOD, 1), members));
 
     if spec.books {
         let mut random = Random::new(7);
@@ -426,4 +427,13 @@ pub fn build_shelf(spec: &ShelfSpec) -> Asset {
         Dimension::new("shelf", "shelf spacing", spacing, 0.25, 0.45),
     ];
     asset
+}
+
+
+fn wood(base: Vec3, seed: u32) -> WoodGrain {
+    WoodGrain { light: base * 1.15, dark: base * 0.7, grain_axis: Vec3::new(0.0, 1.0, 0.0), scale: 28.0, roughness: 0.55, seed }
+}
+
+fn fabric(base: Vec3, seed: u32) -> Fabric {
+    Fabric { base, weave_frequency: 900.0, seed }
 }
