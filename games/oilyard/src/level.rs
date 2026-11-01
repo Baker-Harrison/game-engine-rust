@@ -4,7 +4,10 @@ use engine::layout::{Item, ItemKind, Layout, Purpose};
 use engine::math::Vec3;
 use engine::model::bake::{bake, BakeSettings};
 use engine::model::bvh::Bvh;
+use engine::model::industrial::build_prop;
+use engine::model::lod::simplify;
 use engine::model::mesh::Mesh;
+use engine::model::style::Style;
 use engine::noise::fractal_noise;
 use engine::physics::{Aabb, CollisionWorld};
 
@@ -83,25 +86,50 @@ struct PropCache {
 
 impl PropCache {
     fn new() -> PropCache {
+        let mut built = game_props(vec![
+            ("container_40_red", 0.12),
+            ("container_40_blue", 0.12),
+            ("container_40_sand", 0.12),
+            ("derrick", 0.12),
+            ("jersey_barrier", 0.08),
+            ("sandbag_wall", 0.08),
+            ("crate", 0.08),
+        ])
+        .into_iter();
+        let containers: Vec<Mesh> = built.by_ref().take(3).collect();
+        let derrick = built.next().expect("derrick");
+        let jersey = built.next().expect("jersey");
+        let sandbags = built.next().expect("sandbags");
+        let crate_mesh = built.next().expect("crate");
         PropCache {
             barrels: vec![barrel(BARREL_RED, 1), barrel(BARREL_BLUE, 2), barrel(Vec3::new(0.78, 0.66, 0.2), 3)],
             tank_large: tank(5.0, 7.0, 1),
             tank_small: tank(3.2, 5.0, 2),
-            containers: CONTAINER_COLORS.iter().enumerate().map(|(i, c)| container(12.19, *c, i as u32 + 1)).collect(),
+            containers,
             pipe_run: pipe_run(10.0, 0.4, STEEL),
             elbow: pipe_elbow(0.35, 2.0, STEEL),
-            derrick: derrick(22.0),
+            derrick,
             pump_jack: pump_jack(),
             lamp: lamp_post(6.0),
-            jersey: jersey_barrier(),
-            crates: (0..4).map(|i| crate_box(1.2, i + 1)).collect(),
-            sandbags: sandbag_wall(3.0),
+            jersey,
+            crates: vec![crate_mesh],
+            sandbags,
         }
     }
 }
 
 fn v(x: f32, y: f32, z: f32) -> Vec3 {
     Vec3::new(x, y, z)
+}
+
+fn game_prop(name: &'static str, cell: f32) -> Mesh {
+    let prop = build_prop(name, &Style::desert_industrial()).expect("industrial prop builds");
+    simplify(&prop.asset.merged_mesh(&[]), cell)
+}
+
+fn game_props(specs: Vec<(&'static str, f32)>) -> Vec<Mesh> {
+    let handles: Vec<_> = specs.into_iter().map(|(name, cell)| std::thread::spawn(move || game_prop(name, cell))).collect();
+    handles.into_iter().map(|h| h.join().expect("prop thread")).collect()
 }
 
 impl Builder {
@@ -223,7 +251,7 @@ impl Builder {
             let min = v(x - sx * 0.5, base, z - sz * 0.5);
             let max = v(x + sx * 0.5, base + height, z + sz * 0.5);
             self.collider_only(min, max);
-            let mesh = self.prop_cache.containers[(color + level) % CONTAINER_COLORS.len()].clone();
+            let mesh = self.prop_cache.containers[(color + level) % 3].clone();
             self.place(&mesh, v(x, base, z), if along_x { 0.0 } else { 90.0 });
         }
     }
@@ -245,7 +273,7 @@ impl Builder {
         for level in 0..stack {
             let y = level as f32 * 1.2;
             self.collider_only(v(x - 0.6, y, z - 0.6), v(x + 0.6, y + 1.2, z + 0.6));
-            let mesh = self.prop_cache.crates[(seed + level) % 4].clone();
+            let mesh = self.prop_cache.crates[0].clone();
             self.place(&mesh, v(x, y, z), (seed * 23 + level * 11) as f32);
         }
     }
