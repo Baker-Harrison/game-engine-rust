@@ -29,6 +29,19 @@ pub struct OverlayRect {
 }
 
 #[derive(Clone, Copy)]
+pub struct OverlayTri {
+    pub points: [(f32, f32); 3],
+    pub alpha: [f32; 3],
+    pub color: Vec3,
+}
+
+#[derive(Clone, Copy)]
+pub enum OverlayItem {
+    Rect(OverlayRect),
+    Tri(OverlayTri),
+}
+
+#[derive(Clone, Copy)]
 pub struct BoxEnt {
     pub center: Vec3,
     pub size: Vec3,
@@ -52,7 +65,7 @@ pub struct Scene {
     pub tris: Vec<Tri>,
     pub placed_meshes: Vec<crate::model::mesh::Mesh>,
     pub dynamic: Vec<Tri>,
-    pub overlay: Vec<OverlayRect>,
+    pub overlay: Vec<OverlayItem>,
 }
 
 impl Scene {

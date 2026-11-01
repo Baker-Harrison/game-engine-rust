@@ -286,3 +286,39 @@ fn config_and_saves_persist() {
     assert_eq!(registry.checksum(&restored), registry.checksum(&world));
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn vector_text_is_antialiased_and_scales_with_resolution() {
+    use engine::math::Vec3;
+    use engine::render::{render, Framebuffer};
+    use engine::scene::Scene;
+    use engine::ui::{Align, Ui};
+
+    let white = Vec3::new(1.0, 1.0, 1.0);
+    let mut partial_counts = Vec::new();
+    for (width, height) in [(640usize, 360usize), (1920, 1080)] {
+        let mut ui = Ui::new();
+        ui.set_target(width, height);
+        ui.text(640.0, 300.0, "OIL YARD 0123456789", 6.0, white, Align::Center);
+        let mut scene = Scene::empty(Vec3::new(0.0, 0.0, 0.0), 100.0);
+        scene.overlay = ui.finish();
+        let mut framebuffer = Framebuffer::new(width, height);
+        render(&scene, &scene.camera, &mut framebuffer);
+        let grey = |pixel: u32| (pixel & 255) as u32;
+        let lit = framebuffer.pixels.iter().filter(|p| grey(**p) > 8).count();
+        let partial = framebuffer.pixels.iter().filter(|p| grey(**p) > 24 && grey(**p) < 230).count();
+        assert!(lit > 200, "text drew nothing at {}x{}", width, height);
+        assert!(partial * 25 > lit && partial > 100, "edges are not anti-aliased at {}x{}", width, height);
+        partial_counts.push(lit as f32 / (width * height) as f32);
+    }
+    assert!((partial_counts[0] - partial_counts[1]).abs() < partial_counts[0] * 0.3, "coverage should not depend on resolution");
+}
+
+#[test]
+fn every_character_the_game_prints_has_an_outline() {
+    let font = engine::font::font();
+    for character in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?-+=/%()[]_*\"'<>#|".chars() {
+        assert!(!font.glyph(character).strokes.is_empty(), "no outline for {}", character);
+    }
+    assert!(font.width("WASD") > font.width("IIII") * 0.5);
+}

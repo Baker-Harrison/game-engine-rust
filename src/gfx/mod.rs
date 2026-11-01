@@ -9,7 +9,7 @@ pub mod vulkan;
 use crate::camera::Camera;
 use crate::platform::Window;
 use crate::render::Framebuffer;
-use crate::scene::{OverlayRect, Scene, Tri};
+use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene, Tri};
 
 pub const FAR_PLANE: f32 = 500.0;
 #[repr(C)]
@@ -32,7 +32,7 @@ pub struct FrameUniforms {
 pub const KIND_LIT: f32 = 0.0;
 pub const KIND_UNLIT: f32 = 1.0;
 pub const KIND_SCREEN: f32 = 2.0;
-pub const MAX_DYNAMIC_VERTICES: usize = 240_000;
+pub const MAX_DYNAMIC_VERTICES: usize = 400_000;
 
 fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
     let kind = if triangle.unlit { KIND_UNLIT } else { KIND_LIT };
@@ -42,15 +42,27 @@ fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
     }
 }
 
+fn overlay_vertex(x: f32, y: f32, depth: f32, color: crate::math::Vec3, alpha: f32) -> Vertex {
+    Vertex { pos: [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0], normal: [0.0, 0.0, 1.0, KIND_SCREEN], color: [color.x, color.y, color.z, alpha] }
+}
+
 fn push_overlay_rect(out: &mut Vec<Vertex>, rect: &OverlayRect, depth: f32) {
-    let to_clip = |x: f32, y: f32| [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0];
-    let corner = |x: f32, y: f32| Vertex {
-        pos: to_clip(x, y),
-        normal: [0.0, 0.0, 1.0, KIND_SCREEN],
-        color: [rect.color.x, rect.color.y, rect.color.z, rect.alpha],
-    };
+    let corner = |x: f32, y: f32| overlay_vertex(x, y, depth, rect.color, rect.alpha);
     let (a, b, c, d) = (corner(rect.min.0, rect.min.1), corner(rect.max.0, rect.min.1), corner(rect.max.0, rect.max.1), corner(rect.min.0, rect.max.1));
     out.extend_from_slice(&[a, b, c, a, c, d]);
+}
+
+fn push_overlay_tri(out: &mut Vec<Vertex>, tri: &OverlayTri, depth: f32) {
+    for i in 0..3 {
+        out.push(overlay_vertex(tri.points[i].0, tri.points[i].1, depth, tri.color, tri.alpha[i]));
+    }
+}
+
+fn overlay_vertex_count(item: &OverlayItem) -> usize {
+    match item {
+        OverlayItem::Rect(_) => 6,
+        OverlayItem::Tri(_) => 3,
+    }
 }
 
 pub fn build_vertices(scene: &Scene) -> Vec<Vertex> {
@@ -62,14 +74,20 @@ pub fn build_vertices(scene: &Scene) -> Vec<Vertex> {
 }
 
 pub fn build_dynamic_vertices(scene: &Scene) -> Vec<Vertex> {
-    let mut out = Vec::with_capacity(scene.dynamic.len() * 3 + scene.overlay.len() * 6);
+    let mut out = Vec::with_capacity(scene.dynamic.len() * 3 + scene.overlay.len() * 4);
     for triangle in &scene.dynamic {
         push_triangle(&mut out, triangle);
     }
-    let overlay_budget = scene.overlay.len().min(MAX_DYNAMIC_VERTICES.saturating_sub(out.len()) / 6);
     let steps = scene.overlay.len().max(1) as f32;
-    for (index, rect) in scene.overlay.iter().take(overlay_budget).enumerate() {
-        push_overlay_rect(&mut out, rect, 0.5 - 0.4 * index as f32 / steps);
+    for (index, item) in scene.overlay.iter().enumerate() {
+        if out.len() + overlay_vertex_count(item) > MAX_DYNAMIC_VERTICES {
+            break;
+        }
+        let depth = 0.5 - 0.4 * index as f32 / steps;
+        match item {
+            OverlayItem::Rect(rect) => push_overlay_rect(&mut out, rect, depth),
+            OverlayItem::Tri(tri) => push_overlay_tri(&mut out, tri, depth),
+        }
     }
     out.truncate(MAX_DYNAMIC_VERTICES);
     out

@@ -28,10 +28,12 @@ pub fn run(game: &mut dyn Game, options: &RunOptions) -> Result<(), String> {
     let mut engine = Engine::new(options.seed);
     game.setup(&mut engine)?;
     let mut window = platform::open(game.name(), options.width, options.height)?;
-    let mut gpu = gfx::create(&options.renderer, options.width, options.height, window.as_ref())?;
+    let (pixel_width, pixel_height) = window.size();
+    engine.ui.set_target(pixel_width, pixel_height);
+    let mut gpu = gfx::create(&options.renderer, pixel_width, pixel_height, window.as_ref())?;
     gpu.upload_scene(&engine.scene)?;
     engine.scene_dirty = false;
-    println!("renderer: {}", gpu.name());
+    println!("renderer: {} at {}x{} pixels (scale {:.1})", gpu.name(), pixel_width, pixel_height, window.scale_factor());
     let audio = start_audio(&engine, options);
 
     let mut input = Input::new();
@@ -63,7 +65,7 @@ pub fn run(game: &mut dyn Game, options: &RunOptions) -> Result<(), String> {
         }
         if input.key_pressed(Key::F2) {
             screenshots += 1;
-            save_screenshot(&mut engine, options, screenshots);
+            save_screenshot(&mut engine, (pixel_width, pixel_height), screenshots);
         }
         if !captured {
             input.mouse_dx = 0.0;
@@ -133,8 +135,8 @@ fn start_audio(engine: &Engine, options: &RunOptions) -> Option<AudioOutput> {
     }
 }
 
-fn save_screenshot(engine: &mut Engine, options: &RunOptions, number: u32) {
-    let mut framebuffer = Framebuffer::new(options.width, options.height);
+fn save_screenshot(engine: &mut Engine, pixels: (usize, usize), number: u32) {
+    let mut framebuffer = Framebuffer::new(pixels.0, pixels.1);
     render(&engine.scene, &engine.scene.camera, &mut framebuffer);
     let path = format!("screenshot-{}.png", number);
     match png::write(&framebuffer, &path) {
