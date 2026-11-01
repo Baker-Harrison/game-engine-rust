@@ -85,6 +85,92 @@ struct TexturedSurface<'a> {
     bitangent: Vec3,
 }
 
+pub const CPU_SHADOW_SIZE: usize = 1024;
+
+struct ShadowMap {
+    size: usize,
+    depth: Vec<f32>,
+    matrix: crate::math::Mat4,
+    texel: f32,
+}
+
+struct ShadowFrame<'a> {
+    map: &'a ShadowMap,
+    eye: Vec3,
+    right: Vec3,
+    up: Vec3,
+    forward: Vec3,
+}
+
+impl ShadowMap {
+    fn build(scene: &Scene) -> Option<ShadowMap> {
+        let uniforms = crate::gfx::shadow_uniforms(scene, false, CPU_SHADOW_SIZE);
+        if uniforms.params[0] < 0.5 {
+            return None;
+        }
+        let matrix = crate::math::Mat4(uniforms.light_view_proj);
+        let size = CPU_SHADOW_SIZE;
+        let mut depth = vec![f32::MAX; size * size];
+        let to_map = |p: Vec3| {
+            let q = matrix.mul_point(p);
+            ((q[0] * 0.5 + 0.5) * size as f32, (q[1] * 0.5 + 0.5) * size as f32, q[2])
+        };
+        for tri in scene.tris.iter().chain(scene.dynamic.iter()) {
+            if tri.unlit || scene.is_blended(tri) {
+                continue;
+            }
+            let (a, b, c) = (to_map(tri.v[0]), to_map(tri.v[1]), to_map(tri.v[2]));
+            let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+            if area.abs() < 1e-9 {
+                continue;
+            }
+            let min_x = a.0.min(b.0).min(c.0).floor().max(0.0) as i32;
+            let max_x = a.0.max(b.0).max(c.0).ceil().min(size as f32 - 1.0) as i32;
+            let min_y = a.1.min(b.1).min(c.1).floor().max(0.0) as i32;
+            let max_y = a.1.max(b.1).max(c.1).ceil().min(size as f32 - 1.0) as i32;
+            let inverse = 1.0 / area;
+            for y in min_y..=max_y {
+                let py = y as f32 + 0.5;
+                for x in min_x..=max_x {
+                    let px = x as f32 + 0.5;
+                    let w0 = ((b.0 - px) * (c.1 - py) - (b.1 - py) * (c.0 - px)) * inverse;
+                    let w1 = ((c.0 - px) * (a.1 - py) - (c.1 - py) * (a.0 - px)) * inverse;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
+                        continue;
+                    }
+                    let z = w0 * a.2 + w1 * b.2 + w2 * c.2;
+                    let slot = &mut depth[y as usize * size + x as usize];
+                    if z < *slot {
+                        *slot = z;
+                    }
+                }
+            }
+        }
+        Some(ShadowMap { size, depth, matrix, texel: uniforms.params[1] })
+    }
+
+    fn lit(&self, point: Vec3) -> f32 {
+        let q = self.matrix.mul_point(point);
+        let (u, v, z) = ((q[0] * 0.5 + 0.5) * self.size as f32, (q[1] * 0.5 + 0.5) * self.size as f32, q[2]);
+        let (cx, cy) = (u.floor() as i32, v.floor() as i32);
+        let mut lit = 0.0;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let (x, y) = (cx + dx, cy + dy);
+                if x < 0 || y < 0 || x >= self.size as i32 || y >= self.size as i32 {
+                    lit += 1.0;
+                    continue;
+                }
+                if z - 0.0006 <= self.depth[y as usize * self.size + x as usize] {
+                    lit += 1.0;
+                }
+            }
+        }
+        lit / 9.0
+    }
+}
+
 struct PixelLayout {
     tan_half: f32,
     aspect: f32,
@@ -128,6 +214,8 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
         }
     };
     let layout = PixelLayout { tan_half, aspect, width, height };
+    let shadow_map = ShadowMap::build(scene);
+    let shadow_frame = shadow_map.as_ref().map(|map| ShadowFrame { map, eye: cam.pos, right, up, forward });
 
     for tri in scene.tris.iter().chain(scene.dynamic.iter()).filter(|t| !scene.is_blended(t)).chain(scene.tris.iter().chain(scene.dynamic.iter()).filter(|t| scene.is_blended(t))) {
         let [a, b, c] = tri.v;
@@ -184,7 +272,7 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
         }
         let first = project(polygon[0]);
         for i in 1..count - 1 {
-            raster(fb, first, project(polygon[i]), project(polygon[i + 1]), view_sun(right, up, forward), scene.sky, scene.fog, tri.unlit, textured.as_ref(), &layout);
+            raster(fb, first, project(polygon[i]), project(polygon[i + 1]), view_sun(right, up, forward), scene.sky, scene.fog, tri.unlit, textured.as_ref(), &layout, shadow_frame.as_ref());
         }
     }
     draw_overlay(fb, &scene.overlay);
@@ -261,7 +349,7 @@ fn view_sun(right: Vec3, up: Vec3, forward: Vec3) -> Vec3 {
     Vec3::new(sun.dot(right), sun.dot(up), sun.dot(forward))
 }
 
-fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVertex, sun: Vec3, sky: Vec3, fog: f32, unlit: bool, textured: Option<&TexturedSurface>, layout: &PixelLayout) {
+fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVertex, sun: Vec3, sky: Vec3, fog: f32, unlit: bool, textured: Option<&TexturedSurface>, layout: &PixelLayout, shadow_frame: Option<&ShadowFrame>) {
     let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if area.abs() < 1e-8 {
         return;
@@ -336,10 +424,22 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
             if !blended {
                 fb.depth[idx] = inv_z;
             }
+            let shadow = match (shadow_frame, unlit) {
+                (Some(frame), false) => {
+                    let z = 1.0 / inv_z;
+                    let vx = ((px / layout.width) - 0.5) * 2.0 * layout.tan_half * layout.aspect * z;
+                    let vy = (0.5 - py / layout.height) * 2.0 * layout.tan_half * z;
+                    let world = frame.eye + frame.right * vx + frame.up * vy + frame.forward * z;
+                    let n = normal.normalized();
+                    let world_normal = frame.right * n.x + frame.up * n.y + frame.forward * n.z;
+                    frame.map.lit(world + world_normal * (frame.map.texel * 1.5))
+                }
+                _ => 1.0,
+            };
             let shade = if unlit {
                 1.0
             } else {
-                AMBIENT * occlusion + (1.0 - AMBIENT) * normal.normalized().dot(sun).max(0.0)
+                AMBIENT * occlusion + (1.0 - AMBIENT) * normal.normalized().dot(sun).max(0.0) * shadow
             };
             let mut lit = base * shade;
             if textured.is_some() {
@@ -353,7 +453,7 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
                 let sharpness = 2.0 / (roughness * roughness * roughness * roughness).max(0.0004) - 2.0;
                 let highlight = normal.normalized().dot(half).max(0.0).powf(sharpness.min(2000.0));
                 let facing = normal.normalized().dot(sun).max(0.0);
-                let strength = highlight * facing * (1.0 - roughness) * 0.6;
+                let strength = highlight * facing * (1.0 - roughness) * 0.6 * shadow;
                 let tint = Vec3::new(1.0, 1.0, 1.0).lerp(base, metallic);
                 lit = base * (1.0 - metallic * 0.8) * shade + tint * strength;
             }

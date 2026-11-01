@@ -192,3 +192,41 @@ fn gpu_alpha_matches_cpu_reference() {
         assert!(mean < 8.0, "{:?}: mean channel difference {}", mode, mean);
     }
 }
+
+#[test]
+fn walls_cast_sun_shadows_on_the_ground_on_the_cpu_reference() {
+    let scene = wall_scene(engine::scene::AlphaMode::Opaque, 255, 255);
+    let camera = wall_camera();
+    let (w, h) = (320, 200);
+    let mut fb = Framebuffer::new(w, h);
+    render(&scene, &camera, &mut fb);
+    let pixel_at = |p: Vec3| {
+        let (x, y) = camera.project_to_screen(p, w, h).expect("visible");
+        channels(fb.pixels[y as usize * w + x as usize])
+    };
+    let shadowed = pixel_at(Vec3::new(-1.0, 0.0, 3.4));
+    let lit = pixel_at(Vec3::new(5.0, 0.0, 3.4));
+    assert!(shadowed.1 * 10 < lit.1 * 8, "shadowed {:?} lit {:?}", shadowed, lit);
+}
+
+#[test]
+fn gpu_sun_shadows_match_the_cpu_reference() {
+    let name = if cfg!(target_os = "macos") { "metal" } else { "vulkan" };
+    let scene = wall_scene(engine::scene::AlphaMode::Opaque, 255, 255);
+    let camera = wall_camera();
+    let (w, h) = (320, 200);
+    let mut gpu = match engine::gfx::create_headless(name, w, h) {
+        Ok(gpu) => gpu,
+        Err(e) if e.contains("no Vulkan") || e.contains("no Metal") => return,
+        Err(e) => panic!("{} failed to start: {}", name, e),
+    };
+    gpu.upload_scene(&scene).unwrap();
+    let fb = gpu.render_offscreen(&scene, &camera).unwrap();
+    let pixel_at = |p: Vec3| {
+        let (x, y) = camera.project_to_screen(p, w, h).expect("visible");
+        channels(fb.pixels[y as usize * w + x as usize])
+    };
+    let shadowed = pixel_at(Vec3::new(-1.0, 0.0, 3.4));
+    let lit = pixel_at(Vec3::new(5.0, 0.0, 3.4));
+    assert!(shadowed.1 * 10 < lit.1 * 8, "shadowed {:?} lit {:?}", shadowed, lit);
+}

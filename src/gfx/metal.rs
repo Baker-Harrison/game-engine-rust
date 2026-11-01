@@ -1,5 +1,5 @@
 
-use super::{build_dynamic_vertices, build_vertices, draw_counts, draw_plan, frame_uniforms, pack_materials, DrawRange, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
+use super::{build_dynamic_vertices, build_vertices, draw_counts, draw_plan, frame_uniforms, pack_materials, shadow_uniforms, DrawRange, ShadowUniforms, SHADOW_SIZE, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
 use crate::camera::Camera;
 use crate::platform::objc::*;
 use crate::platform::{NativeHandle, Window};
@@ -35,6 +35,7 @@ struct Region {
 
 const BGRA8: usize = 80;
 const DEPTH32: usize = 252;
+const RENDER_AND_READ: usize = 5;
 
 const SHADER: &str = r#"
 #include <metal_stdlib>
@@ -42,6 +43,7 @@ using namespace metal;
 
 struct Vertex { float4 pos; float4 normal; float4 color; float4 uv; };
 struct U { float4x4 view_proj; float4 eye; float4 sky; float4 sun; float4 params; };
+struct ShadowU { float4x4 light_view_proj; float4 params; };
 struct VOut {
     float4 position [[position]];
     float3 world;
@@ -69,11 +71,33 @@ vertex VOut vs(uint vid [[vertex_id]], constant Vertex* verts [[buffer(0)]], con
     return o;
 }
 
+vertex float4 vs_shadow(uint vid [[vertex_id]], constant Vertex* verts [[buffer(0)]], constant ShadowU& shadow [[buffer(2)]]) {
+    return shadow.light_view_proj * float4(verts[vid].pos.xyz, 1.0);
+}
+
+float sun_visibility(float3 position, float3 normal, constant ShadowU& shadow, depth2d<float> shadow_map, sampler shadow_sampler) {
+    if (shadow.params.x < 0.5) return 1.0;
+    float3 offset_position = position + normal * (shadow.params.y * 1.5);
+    float4 clip = shadow.light_view_proj * float4(offset_position, 1.0);
+    float2 uv = float2(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    float texel = 1.0 / 2048.0;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            lit += shadow_map.sample_compare(shadow_sampler, uv + float2(float(x), float(y)) * texel, clip.z - 0.0006);
+        }
+    }
+    return lit / 9.0;
+}
+
 fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
                    texture2d_array<float> albedo_tex [[texture(0)]],
                    texture2d_array<float> normal_tex [[texture(1)]],
                    texture2d_array<float> packed_tex [[texture(2)]],
-                   sampler material_sampler [[sampler(0)]]) {
+                   constant ShadowU& shadow_u [[buffer(2)]],
+                   depth2d<float> shadow_map [[texture(3)]],
+                   sampler material_sampler [[sampler(0)]],
+                   sampler shadow_sampler [[sampler(1)]]) {
     if (i.kind > 1.5) return i.color;
     float3 n = normalize(i.normal);
     float3 to_eye = normalize(u.eye.xyz - i.world);
@@ -109,7 +133,8 @@ fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
     }
     float ambient = u.sun.w;
     float facing = max(dot(n, u.sun.xyz), 0.0);
-    float shade = ambient * occlusion + (1.0 - ambient) * facing;
+    float shadow = i.kind > 0.5 ? 1.0 : sun_visibility(i.world, n, shadow_u, shadow_map, shadow_sampler);
+    float shade = ambient * occlusion + (1.0 - ambient) * facing * shadow;
     if (i.kind > 0.5) shade = 1.0;
     float3 lit = base * shade;
     if (textured) {
@@ -117,7 +142,7 @@ fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
         float r4 = max(roughness * roughness * roughness * roughness, 0.0004);
         float sharpness = min(2.0 / r4 - 2.0, 2000.0);
         float highlight = pow(max(dot(n, half_vector), 0.0), sharpness);
-        float strength = highlight * facing * (1.0 - roughness) * 0.6;
+        float strength = highlight * facing * (1.0 - roughness) * 0.6 * shadow;
         float3 tint = mix(float3(1.0), base, metallic);
         lit = base * (1.0 - metallic * 0.8) * shade + tint * strength;
     }
@@ -133,6 +158,10 @@ pub struct MetalRenderer {
     pipeline: Id,
     depth_state: Id,
     blend_depth_state: Id,
+    shadow_pipeline: Id,
+    shadow_texture: Id,
+    shadow_sampler: Id,
+    shadow_draws: Vec<DrawRange>,
     static_opaque: usize,
     draws: Vec<DrawRange>,
     depth_tex: Id,
@@ -246,6 +275,10 @@ impl MetalRenderer {
             pipeline,
             depth_state,
             blend_depth_state,
+            shadow_pipeline: std::ptr::null_mut(),
+            shadow_texture: std::ptr::null_mut(),
+            shadow_sampler: std::ptr::null_mut(),
+            shadow_draws: Vec::new(),
             static_opaque: 0,
             draws: Vec::new(),
             depth_tex,
@@ -272,6 +305,32 @@ impl MetalRenderer {
             return Err("Metal sampler creation failed".into());
         }
         renderer.upload_materials(None)?;
+
+        let shadow_vs = send!(Id; lib, "newFunctionWithName:", Id = nsstring("vs_shadow"));
+        let shadow_desc = send!(Id; send!(Id; class("MTLRenderPipelineDescriptor"), "alloc"), "init");
+        send!((); shadow_desc, "setVertexFunction:", Id = shadow_vs);
+        send!((); shadow_desc, "setDepthAttachmentPixelFormat:", usize = DEPTH32);
+        err = std::ptr::null_mut();
+        renderer.shadow_pipeline = send!(Id; device, "newRenderPipelineStateWithDescriptor:error:", Id = shadow_desc, *mut Id = &mut err);
+        if renderer.shadow_pipeline.is_null() {
+            return Err(format!("Metal shadow pipeline creation failed: {}", error_text(err)));
+        }
+        let shadow_tex_desc = send!(Id; class("MTLTextureDescriptor"),
+            "texture2DDescriptorWithPixelFormat:width:height:mipmapped:",
+            usize = DEPTH32, usize = SHADOW_SIZE, usize = SHADOW_SIZE, bool = false);
+        send!((); shadow_tex_desc, "setUsage:", usize = RENDER_AND_READ);
+        send!((); shadow_tex_desc, "setStorageMode:", usize = 2);
+        renderer.shadow_texture = send!(Id; device, "newTextureWithDescriptor:", Id = shadow_tex_desc);
+        let shadow_sampler_desc = send!(Id; send!(Id; class("MTLSamplerDescriptor"), "alloc"), "init");
+        send!((); shadow_sampler_desc, "setMinFilter:", usize = 1);
+        send!((); shadow_sampler_desc, "setMagFilter:", usize = 1);
+        send!((); shadow_sampler_desc, "setSAddressMode:", usize = 0);
+        send!((); shadow_sampler_desc, "setTAddressMode:", usize = 0);
+        send!((); shadow_sampler_desc, "setCompareFunction:", usize = 3);
+        renderer.shadow_sampler = send!(Id; device, "newSamplerStateWithDescriptor:", Id = shadow_sampler_desc);
+        if renderer.shadow_texture.is_null() || renderer.shadow_sampler.is_null() {
+            return Err("Metal shadow map creation failed".into());
+        }
         Ok(renderer)
     }
 
@@ -317,7 +376,30 @@ impl MetalRenderer {
         Ok(())
     }
 
-    unsafe fn encode(&self, target: Id, u: &FrameUniforms, slot: usize) -> Id {
+    unsafe fn encode(&self, target: Id, u: &FrameUniforms, shadow: &ShadowUniforms, slot: usize) -> Id {
+        let cb = send!(Id; self.queue, "commandBuffer");
+        let shadow_pass = send!(Id; class("MTLRenderPassDescriptor"), "renderPassDescriptor");
+        let shadow_depth = send!(Id; shadow_pass, "depthAttachment");
+        send!((); shadow_depth, "setTexture:", Id = self.shadow_texture);
+        send!((); shadow_depth, "setLoadAction:", usize = 2);
+        send!((); shadow_depth, "setStoreAction:", usize = 1);
+        send!((); shadow_depth, "setClearDepth:", f64 = 1.0);
+        let shadow_enc = send!(Id; cb, "renderCommandEncoderWithDescriptor:", Id = shadow_pass);
+        if shadow.params[0] > 0.5 {
+            send!((); shadow_enc, "setRenderPipelineState:", Id = self.shadow_pipeline);
+            send!((); shadow_enc, "setDepthStencilState:", Id = self.depth_state);
+            send!((); shadow_enc, "setVertexBytes:length:atIndex:", *const c_void = shadow as *const ShadowUniforms as *const c_void, usize = std::mem::size_of::<ShadowUniforms>(), usize = 2);
+            for range in &self.shadow_draws {
+                let buffer = if range.dynamic { self.dynamic_buffers[slot] } else { self.vertex_buf };
+                if buffer.is_null() {
+                    continue;
+                }
+                send!((); shadow_enc, "setVertexBuffer:offset:atIndex:", Id = buffer, usize = 0, usize = 0);
+                send!((); shadow_enc, "drawPrimitives:vertexStart:vertexCount:", usize = 3, usize = range.first, usize = range.count);
+            }
+        }
+        send!((); shadow_enc, "endEncoding");
+
         let pass = send!(Id; class("MTLRenderPassDescriptor"), "renderPassDescriptor");
         let color = send!(Id; send!(Id; pass, "colorAttachments"), "objectAtIndexedSubscript:", usize = 0);
         send!((); color, "setTexture:", Id = target);
@@ -331,7 +413,6 @@ impl MetalRenderer {
         send!((); depth, "setStoreAction:", usize = 0);
         send!((); depth, "setClearDepth:", f64 = 1.0);
 
-        let cb = send!(Id; self.queue, "commandBuffer");
         let enc = send!(Id; cb, "renderCommandEncoderWithDescriptor:", Id = pass);
         send!((); enc, "setRenderPipelineState:", Id = self.pipeline);
         send!((); enc, "setDepthStencilState:", Id = self.depth_state);
@@ -343,6 +424,9 @@ impl MetalRenderer {
             send!((); enc, "setFragmentTexture:atIndex:", Id = *texture, usize = index);
         }
         send!((); enc, "setFragmentSamplerState:atIndex:", Id = self.material_sampler, usize = 0);
+        send!((); enc, "setFragmentBytes:length:atIndex:", *const c_void = shadow as *const ShadowUniforms as *const c_void, usize = std::mem::size_of::<ShadowUniforms>(), usize = 2);
+        send!((); enc, "setFragmentTexture:atIndex:", Id = self.shadow_texture, usize = 3);
+        send!((); enc, "setFragmentSamplerState:atIndex:", Id = self.shadow_sampler, usize = 1);
         for range in &self.draws {
             let buffer = if range.dynamic { self.dynamic_buffers[slot] } else { self.vertex_buf };
             if buffer.is_null() {
@@ -376,6 +460,13 @@ impl MetalRenderer {
         let mut counts = draw_counts(scene, self.vertex_count, verts.len());
         counts.static_opaque = self.static_opaque.min(self.vertex_count);
         self.draws = draw_plan(&counts);
+        self.shadow_draws = [
+            DrawRange { blend_pass: false, dynamic: false, first: 0, count: counts.static_opaque },
+            DrawRange { blend_pass: false, dynamic: true, first: 0, count: counts.dynamic_opaque },
+        ]
+        .into_iter()
+        .filter(|r| r.count > 0)
+        .collect();
     }
 }
 
@@ -421,7 +512,8 @@ impl Renderer for MetalRenderer {
                 self.frame += 1;
                 self.wait_for_slot(slot);
                 self.write_dynamic(scene, slot);
-                let cb = self.encode(tex, &u, slot);
+                let shadow = shadow_uniforms(scene, false, SHADOW_SIZE);
+                let cb = self.encode(tex, &u, &shadow, slot);
                 send!((); cb, "presentDrawable:", Id = drawable);
                 send!(Id; cb, "retain");
                 self.in_flight[slot] = cb;
@@ -450,7 +542,8 @@ impl Renderer for MetalRenderer {
             }
             self.wait_for_slot(0);
             self.write_dynamic(scene, 0);
-            let cb = self.encode(tex, &u, 0);
+            let shadow = shadow_uniforms(scene, false, SHADOW_SIZE);
+            let cb = self.encode(tex, &u, &shadow, 0);
             send!((); cb, "commit");
             if storage == 1 {
                 let cb2 = send!(Id; self.queue, "commandBuffer");

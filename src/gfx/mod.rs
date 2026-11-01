@@ -12,6 +12,7 @@ use crate::render::Framebuffer;
 use crate::scene::{AlphaMode, OverlayItem, OverlayRect, OverlayTri, Scene, Tri};
 
 pub const FAR_PLANE: f32 = 500.0;
+pub const SHADOW_SIZE: usize = 2048;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Vertex {
@@ -268,4 +269,69 @@ pub fn pack_materials(scene: &Scene) -> Option<MaterialArrays> {
         levels.push(packed_level);
     }
     Some(MaterialArrays { layers: scene.materials.len(), levels })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShadowUniforms {
+    pub light_view_proj: [f32; 16],
+    pub params: [f32; 4],
+}
+
+pub fn shadow_uniforms(scene: &Scene, flip_y: bool, map_size: usize) -> ShadowUniforms {
+    let mut low = crate::math::Vec3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut high = crate::math::Vec3::new(f32::MIN, f32::MIN, f32::MIN);
+    let mut any = false;
+    for triangle in scene.tris.iter().chain(scene.dynamic.iter()) {
+        if triangle.unlit || scene.is_blended(triangle) {
+            continue;
+        }
+        for v in triangle.v {
+            low = low.min(v);
+            high = high.max(v);
+            any = true;
+        }
+    }
+    if !any {
+        return ShadowUniforms::default();
+    }
+    let sun = crate::render::SUN.normalized();
+    let forward = sun * -1.0;
+    let helper = if forward.y.abs() > 0.95 { crate::math::Vec3::new(1.0, 0.0, 0.0) } else { crate::math::Vec3::new(0.0, 1.0, 0.0) };
+    let right = helper.cross(forward).normalized();
+    let up = forward.cross(right).normalized();
+    let center = (low + high) * 0.5;
+    let (mut min_x, mut max_x, mut min_y, mut max_y, mut min_z, mut max_z) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for corner in 0..8 {
+        let p = crate::math::Vec3::new(
+            if corner & 1 == 0 { low.x } else { high.x },
+            if corner & 2 == 0 { low.y } else { high.y },
+            if corner & 4 == 0 { low.z } else { high.z },
+        ) - center;
+        let (x, y, z) = (p.dot(right), p.dot(up), p.dot(forward));
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+        min_z = min_z.min(z);
+        max_z = max_z.max(z);
+    }
+    let margin = 1.0;
+    let (min_x, max_x, min_y, max_y, min_z, max_z) = (min_x - margin, max_x + margin, min_y - margin, max_y + margin, min_z - margin, max_z + margin);
+    let (sx, sy, sz) = (2.0 / (max_x - min_x), 2.0 / (max_y - min_y), 1.0 / (max_z - min_z));
+    let flip = if flip_y { -1.0 } else { 1.0 };
+    let rows = [
+        [right.x * sx, right.y * sx, right.z * sx, -(right.dot(center) + min_x) * sx - 1.0],
+        [up.x * sy * flip, up.y * sy * flip, up.z * sy * flip, (-(up.dot(center) + min_y) * sy - 1.0) * flip],
+        [forward.x * sz, forward.y * sz, forward.z * sz, -(forward.dot(center) + min_z) * sz],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let mut m = [0.0f32; 16];
+    for c in 0..4 {
+        for r in 0..4 {
+            m[c * 4 + r] = rows[r][c];
+        }
+    }
+    let texel = ((max_x - min_x) / map_size as f32).max((max_y - min_y) / map_size as f32);
+    ShadowUniforms { light_view_proj: m, params: [1.0, texel, 0.0, 0.0] }
 }
