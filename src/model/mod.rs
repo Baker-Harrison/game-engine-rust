@@ -1,7 +1,9 @@
 pub mod arch;
 pub mod bake;
 pub mod bvh;
+pub mod detail;
 pub mod furniture;
+pub mod lod;
 pub mod material;
 pub mod mesh;
 pub mod mesher;

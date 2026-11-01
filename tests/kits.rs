@@ -48,3 +48,50 @@ fn swatches_build_one_part_per_style_material() {
     let asset = build_swatches(&style, 0.05);
     assert_eq!(asset.parts.len(), style.materials.len());
 }
+
+use engine::model::bvh::Bvh;
+use engine::model::detail::{build_styled_mesh_part, build_styled_part, DetailSpec};
+use engine::model::lod::build_lod_chain;
+use engine::model::part::PartKind;
+
+#[test]
+fn lod_chain_reduces_triangles_and_stays_near_the_surface() {
+    let sphere = mesh_sdf(&Sdf::sphere(0.5), 0.01, Vec3::splat(0.5));
+    let chain = build_lod_chain(&sphere, &[0.25, 0.06]);
+    assert_eq!(chain.len(), 3);
+    assert!(chain[1].mesh.triangle_count() < chain[0].mesh.triangle_count() / 2);
+    assert!(chain[2].mesh.triangle_count() < chain[1].mesh.triangle_count());
+    let reference = Bvh::from_meshes(&[&sphere]);
+    for position in &chain[2].mesh.positions {
+        let toward_center = (Vec3::ZERO - *position).normalized();
+        let outside = *position - toward_center * 0.0;
+        let distance_from_surface = (outside.length() - 0.5).abs();
+        assert!(distance_from_surface < 0.04, "{}", distance_from_surface);
+    }
+    assert!(reference.any_hit(Vec3::new(0.0, 0.0, 2.0), Vec3::new(0.0, 0.0, -1.0), 10.0));
+}
+
+#[test]
+fn styled_part_builds_with_uvs_and_material() {
+    let style = Style::overgrown_manor();
+    let block = Sdf::round_box(Vec3::new(1.0, 0.5, 0.4), 0.03);
+    let part = build_styled_part("wall", PartKind::Architecture, &block, &style, "stone_wall", DetailSpec::new(0.03), Vec::new()).unwrap();
+    assert!(part.mesh.uvs.iter().any(|uv| uv[0] != 0.0 || uv[1] != 0.0));
+}
+
+#[test]
+fn raw_box_mesh_is_rejected_by_the_bevel_floor() {
+    let style = Style::overgrown_manor();
+    let mut raw = Mesh::new();
+    raw.add_box(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0), Vec3::splat(0.5));
+    let error = build_styled_mesh_part("wall", PartKind::Architecture, raw, &style, "stone_wall", Vec::new()).err().unwrap();
+    assert!(error.contains("bevel coverage"), "{}", error);
+}
+
+#[test]
+fn triangle_budget_is_enforced() {
+    let style = Style::overgrown_manor();
+    let block = Sdf::round_box(Vec3::new(2.0, 2.0, 2.0), 0.05);
+    let error = build_styled_part("wall", PartKind::Architecture, &block, &style, "stone_wall", DetailSpec::new(0.03).with_budget(1000), Vec::new()).err().unwrap();
+    assert!(error.contains("budget"), "{}", error);
+}
