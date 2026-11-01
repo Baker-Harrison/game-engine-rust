@@ -1,7 +1,7 @@
 use super::material::{Material, Plain, Surface};
 use super::part::{Asset, Part, PartKind};
 use super::sdf::Sdf;
-use super::stylized::{Cobblestone, PaintedPlaster, Slate, StoneBlocks, Weathering, WroughtIron};
+use super::stylized::{Bark, Cobblestone, PaintedPlaster, Slate, StoneBlocks, Weathering, WroughtIron};
 use crate::math::Vec3;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -81,6 +81,7 @@ impl Style {
                 "plaster_wall",
                 PaintedPlaster { paint: Vec3::new(0.66, 0.60, 0.46), plaster: Vec3::new(0.55, 0.50, 0.42), peel: 0.18, weathering, seed: 35 },
             )
+            .with_material("bark", Bark { bark: Vec3::new(0.24, 0.18, 0.13), groove: Vec3::new(0.08, 0.06, 0.05), ridge_frequency: 9.0, weathering, seed: 36 })
             .with_material("timber", Plain { material: Material::new(Vec3::new(0.26, 0.17, 0.10), 0.7, 0.0) })
     }
 }

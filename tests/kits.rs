@@ -179,3 +179,28 @@ fn baked_maps_tile_seamlessly_and_match_requested_size() {
 fn unknown_material_cannot_be_baked() {
     assert!(Style::overgrown_manor().bake_material_maps("granite", 16).is_err());
 }
+
+use engine::model::vegetation::{build_tree, ground_cover, GroundCoverSpec, TreeSpec};
+
+#[test]
+fn trees_are_deterministic_and_seed_dependent() {
+    let a = build_tree(&TreeSpec::oak(6.0));
+    let b = build_tree(&TreeSpec::oak(6.0));
+    let mut other = TreeSpec::oak(6.0);
+    other.seed = 99;
+    let c = build_tree(&other);
+    assert_eq!(a.leaf_count, b.leaf_count);
+    assert_eq!(a.foliage.positions, b.foliage.positions);
+    assert_ne!(a.foliage.positions, c.foliage.positions);
+    assert!(a.branch_count > 20 && a.leaf_count > 500);
+}
+
+#[test]
+fn ground_cover_respects_density_and_clear_zones() {
+    let spec = GroundCoverSpec { half_width: 2.0, half_depth: 2.0, blades_per_square_meter: 50.0, blade_height: 0.3, seed: 3 };
+    let all = ground_cover(&spec, &|_, _| false);
+    let cleared = ground_cover(&spec, &|x, _| x > 0.0);
+    assert!(all.triangle_count() as f32 > 16.0 * 50.0 * 2.0 * 0.95);
+    assert!(cleared.triangle_count() < all.triangle_count() * 6 / 10);
+    assert!(cleared.positions.iter().all(|p| p.x <= 0.5));
+}

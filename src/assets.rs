@@ -15,6 +15,16 @@ pub struct AssetDefinition {
 pub fn definitions() -> Vec<AssetDefinition> {
     vec![
         AssetDefinition {
+            name: "garden",
+            summary: "procedural oak with leaf cards and scattered grass",
+            parameters: &[("height", 7.0), ("seed", 7.0)],
+            build: |p| {
+                let mut spec = crate::model::vegetation::TreeSpec::oak(p.get("height"));
+                spec.seed = p.get("seed") as u64;
+                crate::model::garden::build_garden(&crate::model::style::Style::overgrown_manor(), &spec).unwrap_or_else(|error| panic!("{}", error))
+            },
+        },
+        AssetDefinition {
             name: "manor",
             summary: "two-storey gabled manor with arched door, reveals, eaves cornice and slate roof",
             parameters: &[("width", 9.0), ("depth", 6.0), ("storeys", 2.0), ("windows", 3.0), ("pitch", 38.0)],

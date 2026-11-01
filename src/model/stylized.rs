@@ -174,3 +174,24 @@ impl Surface for PaintedPlaster {
         self.weathering.apply(painted.lerp(bare, exposed), sample)
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct Bark {
+    pub bark: Vec3,
+    pub groove: Vec3,
+    pub ridge_frequency: f32,
+    pub weathering: Weathering,
+    pub seed: u32,
+}
+
+impl Surface for Bark {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        let p = sample.position;
+        let angle = p.z.atan2(p.x);
+        let warp = fractal_noise(p.x * 3.0, p.y * 1.2, p.z * 3.0, 3, self.seed) * 0.8;
+        let ridge = ((angle * self.ridge_frequency + warp * 4.0).sin() * 0.5 + 0.5).powf(1.5);
+        let flake = value_noise(p.x * 40.0, p.y * 12.0, p.z * 40.0, self.seed + 1);
+        let base = Material::new(self.groove.lerp(self.bark, ridge) * (0.85 + 0.3 * flake), 0.95, 0.0);
+        self.weathering.apply(base, sample)
+    }
+}
