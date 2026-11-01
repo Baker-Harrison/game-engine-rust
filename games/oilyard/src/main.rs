@@ -10,6 +10,7 @@ mod player;
 mod pose;
 mod props;
 mod render;
+mod rig;
 mod sfx;
 mod state;
 mod weapons;

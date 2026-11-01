@@ -1,6 +1,7 @@
 use engine::math::Vec3;
 use engine::model::mesh::Mesh;
 use engine::scene::Tri;
+use engine::skeleton::JointTransform;
 
 #[derive(Clone, Copy)]
 pub struct Placement {
@@ -41,7 +42,7 @@ impl Placement {
         rotate_y(rotate_x(rotate_x(p, self.swing) + self.offset, self.pitch), self.yaw) + self.origin
     }
 
-    fn direction(&self, d: Vec3) -> Vec3 {
+    pub fn direction(&self, d: Vec3) -> Vec3 {
         rotate_y(rotate_x(rotate_x(d, self.swing), self.pitch), self.yaw)
     }
 }
@@ -68,6 +69,27 @@ pub fn push_mesh(out: &mut Vec<Tri>, mesh: &Mesh, placement: &Placement) {
                 mesh.colors[at(0)].mul_elements(placement.tint),
                 mesh.colors[at(1)].mul_elements(placement.tint),
                 mesh.colors[at(2)].mul_elements(placement.tint),
+            ],
+            s: [mesh.surfaces[at(0)], mesh.surfaces[at(1)], mesh.surfaces[at(2)]],
+            t: [[0.0; 2]; 3],
+            material: 0,
+            unlit: false,
+        });
+    }
+}
+
+pub fn push_mesh_bone(out: &mut Vec<Tri>, mesh: &Mesh, bone: &JointTransform, local_origin: Vec3, base: &Placement) {
+    let points: Vec<Vec3> = mesh.positions.iter().map(|p| base.point(bone.position + bone.rotation.rotate(*p - local_origin))).collect();
+    let normals: Vec<Vec3> = mesh.normals.iter().map(|n| base.direction(bone.rotation.rotate(*n))).collect();
+    for triangle in mesh.indices.chunks(3) {
+        let at = |k: usize| triangle[k] as usize;
+        out.push(Tri {
+            v: [points[at(0)], points[at(1)], points[at(2)]],
+            n: [normals[at(0)], normals[at(1)], normals[at(2)]],
+            c: [
+                mesh.colors[at(0)].mul_elements(base.tint),
+                mesh.colors[at(1)].mul_elements(base.tint),
+                mesh.colors[at(2)].mul_elements(base.tint),
             ],
             s: [mesh.surfaces[at(0)], mesh.surfaces[at(1)], mesh.surfaces[at(2)]],
             t: [[0.0; 2]; 3],

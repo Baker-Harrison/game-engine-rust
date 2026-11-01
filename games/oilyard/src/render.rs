@@ -1,6 +1,7 @@
 use crate::bodies::{ARM_OFFSET, HIP_HEIGHT, LEG_OFFSET, SHOULDER_HEIGHT};
 use crate::level::PickupKind;
-use crate::pose::{push_mesh, push_quad, Placement};
+use crate::pose::{push_mesh, push_mesh_bone, push_quad, Placement};
+use crate::rig::RigInput;
 use crate::state::{Brain, Fighter, Oilyard, Pickup};
 use crate::weapons::{spec, WeaponKind};
 use engine::math::Vec3;
@@ -57,16 +58,25 @@ impl Oilyard {
             }
             let fall = if fighter.alive { 0.0 } else { (fighter.dead_for * 4.0).min(1.45) };
             let base = Placement::at(body.position, brain.yaw).pitch(fall);
-            let stride = brain.walk_phase.sin() * 0.75 * brain.speed_fraction.min(1.0);
-            push_mesh(out, &model.torso, &base.tint(SHIRT));
-            push_mesh(out, &model.vest, &base.tint(brain.tint));
-            push_mesh(out, &model.head, &base);
-            push_mesh(out, &model.helmet, &base);
-            push_mesh(out, &model.leg, &base.offset(Vec3::new(LEG_OFFSET, HIP_HEIGHT, 0.0)).swing(stride).tint(PANTS));
-            push_mesh(out, &model.leg, &base.offset(Vec3::new(-LEG_OFFSET, HIP_HEIGHT, 0.0)).swing(-stride).tint(PANTS));
-            push_mesh(out, &model.arm, &base.offset(Vec3::new(ARM_OFFSET, SHOULDER_HEIGHT, 0.0)).swing(1.15).tint(SHIRT));
-            push_mesh(out, &model.arm, &base.offset(Vec3::new(-ARM_OFFSET + 0.06, SHOULDER_HEIGHT, 0.0)).swing(1.0).tint(SHIRT));
-            push_mesh(out, &model.rifle, &base.offset(Vec3::new(0.14, 1.2, -0.3)));
+            let rig = &model.rig;
+            let alive_speed = if fighter.alive { brain.speed_fraction } else { 0.0 };
+            let input = RigInput { phase: brain.walk_phase, speed: alive_speed, aim_pitch: 0.0, recoil: if brain.flash > 0 { 1.0 } else { 0.0 } };
+            let pose = rig.pose(&input);
+            let (hips, chest, head) = (rig.transform(&pose, "hips"), rig.transform(&pose, "chest"), rig.transform(&pose, "head"));
+            let (hips_rest, chest_rest, head_rest) = (rig.rest_position("hips"), rig.rest_position("chest"), rig.rest_position("head"));
+            push_mesh_bone(out, &model.torso, &hips, hips_rest, &base.tint(SHIRT));
+            push_mesh_bone(out, &model.vest, &chest, chest_rest, &base.tint(brain.tint));
+            push_mesh_bone(out, &model.head, &head, head_rest, &base);
+            push_mesh_bone(out, &model.helmet, &head, head_rest, &base);
+            push_mesh_bone(out, &model.rifle, &chest, chest_rest - Vec3::new(0.14, 1.2, -0.3), &base);
+            for side in ["r", "l"] {
+                let sleeve = base.tint(SHIRT);
+                let trousers = base.tint(PANTS);
+                push_mesh_bone(out, &rig.upper_arm, &rig.transform(&pose, &format!("shoulder_{}", side)), Vec3::ZERO, &sleeve);
+                push_mesh_bone(out, &rig.forearm, &rig.transform(&pose, &format!("elbow_{}", side)), Vec3::ZERO, &sleeve);
+                push_mesh_bone(out, &rig.thigh, &rig.transform(&pose, &format!("thigh_{}", side)), Vec3::ZERO, &trousers);
+                push_mesh_bone(out, &rig.shin, &rig.transform(&pose, &format!("knee_{}", side)), Vec3::ZERO, &trousers);
+            }
             if brain.flash > 0 && fighter.alive {
                 let muzzle = base.point(Vec3::new(0.14, 1.215, -0.92));
                 let right = Vec3::new(brain.yaw.cos(), 0.0, -brain.yaw.sin());
