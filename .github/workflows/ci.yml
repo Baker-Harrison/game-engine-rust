@@ -39,15 +39,12 @@ jobs:
           cargo run --release -- inspect house furniture_cell=0.012 --out inspect/house
       - name: Render a scene that places an asset
         run: cargo run --release -- render scenes/showroom.scene --out showroom.ppm
-      - name: Sample game layout check gate
-        run: cargo run --release -p oilyard -- check
-      - name: Sample game headless simulation
-        run: cargo run --release -p oilyard -- sim --ticks 900 --seed 3
-      - name: Sample game frame capture
-        run: cargo run --release -p oilyard -- shot --out oilyard.png --ticks 120 --width 640 --height 360
-      - name: Sample game window smoke test (Linux, virtual display)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a cargo run --release -p oilyard -- play --frames 30 --no-audio
-      - name: Sample game window smoke test (macOS and Windows)
-        if: runner.os != 'Linux'
-        run: cargo run --release -p oilyard -- play --frames 30 --no-audio
+      - name: New-project smoke test (scaffold, simulate, capture, package)
+        shell: bash
+        run: |
+          cargo run --release -- new ci-smoke
+          cargo run --release -- package ci-smoke
+          cargo run --release -p ci-smoke -- sim --ticks 120 --seed 3
+          cargo run --release -p ci-smoke -- shot --out ci-smoke.png --ticks 60 --width 640 --height 360
+          xvfb_prefix=""; [ "$RUNNER_OS" = "Linux" ] && xvfb_prefix="xvfb-run -a"
+          $xvfb_prefix cargo run --release -p ci-smoke -- play --frames 30 --no-audio

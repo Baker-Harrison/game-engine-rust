@@ -10,6 +10,7 @@ pub enum NativeHandle {
     X11 { display: *mut std::ffi::c_void, window: u64 },
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code, unused_imports))]
 pub(crate) mod dl;
 
 pub trait Window {

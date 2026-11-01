@@ -70,7 +70,7 @@ pub fn build_human_rigged(style: &Style, spec: &BodySpec, pose: &HandPose) -> Re
     let mut asset = Asset::new("human_rigged");
     asset.add_stage_floor(0.0, 0.0, 2.5, 0.1, 0.0, Vec3::new(0.62, 0.62, 0.60));
     let mut joints = std::collections::BTreeMap::new();
-    let mut add = |asset: &mut Asset, name: &str, sdf: Sdf, feature: f32| -> Result<(), String> {
+    let add = |asset: &mut Asset, name: &str, sdf: Sdf, feature: f32| -> Result<(), String> {
         asset.parts.push(skin_part(name, &sdf, style, feature)?);
         Ok(())
     };

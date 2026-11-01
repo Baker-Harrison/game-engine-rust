@@ -104,10 +104,8 @@ pub fn start(mixer: SharedMixer, stop: Arc<AtomicBool>) -> Result<Option<JoinHan
             while !stop.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            unsafe {
-                AudioQueueStop(handle.0, true);
-                AudioQueueDispose(handle.0, true);
-            }
+            AudioQueueStop(handle.0, true);
+            AudioQueueDispose(handle.0, true);
         });
         Ok(Some(thread))
     }

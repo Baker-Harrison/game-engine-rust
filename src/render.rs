@@ -218,7 +218,7 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
     let shadow_frame = shadow_map.as_ref().map(|map| ShadowFrame { map, eye: cam.pos, right, up, forward });
 
     for tri in scene.tris.iter().chain(scene.dynamic.iter()).filter(|t| !scene.is_blended(t)).chain(scene.tris.iter().chain(scene.dynamic.iter()).filter(|t| scene.is_blended(t))) {
-        let [a, b, c] = tri.v;
+        let a = tri.v[0];
         let facing_away = (tri.n[0] + tri.n[1] + tri.n[2]).dot(cam.pos - a) < 0.0;
         let normal_sign = if facing_away { -1.0 } else { 1.0 };
 

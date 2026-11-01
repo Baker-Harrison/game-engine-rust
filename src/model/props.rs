@@ -13,7 +13,6 @@ const PARKERIZED_EDGE: Vec3 = Vec3::new(0.64, 0.64, 0.66);
 const RUBBER: Vec3 = Vec3::new(0.06, 0.06, 0.065);
 const STAGE_GRAY: Vec3 = Vec3::new(0.70, 0.71, 0.73);
 
-const X_AXIS: Vec3 = Vec3::new(1.0, 0.0, 0.0);
 const Z_AXIS: Vec3 = Vec3::new(0.0, 0.0, 1.0);
 const RAIL_CENTER_HEIGHT: f32 = 0.031;
 const RAIL_STEP: f32 = 0.0165;
