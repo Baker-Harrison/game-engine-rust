@@ -15,8 +15,15 @@ pub struct StyleTargets {
     pub max_triangles_per_square_meter: f32,
 }
 
+#[derive(Clone, Copy)]
+pub enum AlphaKind {
+    LeafCutout,
+    GlassBlend(f32),
+}
+
 #[derive(Clone)]
 pub struct Style {
+    pub alpha: BTreeMap<String, AlphaKind>,
     pub name: String,
     pub palette: BTreeMap<String, Vec3>,
     pub materials: BTreeMap<String, Arc<dyn Surface>>,
@@ -62,6 +69,7 @@ impl Style {
             name: "overgrown_manor".to_string(),
             palette,
             materials: BTreeMap::new(),
+            alpha: BTreeMap::from([("leaf".to_string(), AlphaKind::LeafCutout), ("glass".to_string(), AlphaKind::GlassBlend(0.25))]),
             weathering,
             meters_per_tile: 1.0,
             targets: StyleTargets {
@@ -84,6 +92,7 @@ impl Style {
             .with_material("bark", Bark { bark: Vec3::new(0.24, 0.18, 0.13), groove: Vec3::new(0.08, 0.06, 0.05), ridge_frequency: 9.0, weathering, seed: 36 })
             .with_material("skin", Skin { base: Vec3::new(0.62, 0.44, 0.34), flush: Vec3::new(0.70, 0.40, 0.32), seed: 37 })
             .with_material("glass", Plain { material: Material::new(Vec3::new(0.35, 0.45, 0.50), 0.05, 0.0) })
+            .with_material("leaf", Plain { material: Material::new(Vec3::new(0.13, 0.24, 0.06), 0.6, 0.0) })
             .with_material("timber", Plain { material: Material::new(Vec3::new(0.26, 0.17, 0.10), 0.7, 0.0) })
     }
 }

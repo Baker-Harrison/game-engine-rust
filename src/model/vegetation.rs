@@ -116,6 +116,10 @@ pub fn add_leaf(mesh: &mut Mesh, random: &mut Random, center: Vec3, size: f32, h
         let b = mesh.push_surface_vertex(left, facing, color, [0.7, 0.0]);
         let c = mesh.push_surface_vertex(tip, facing, color * 1.1, [0.7, 0.0]);
         let d = mesh.push_surface_vertex(right, facing, color, [0.7, 0.0]);
+        mesh.uvs[a as usize] = [0.5, 0.0];
+        mesh.uvs[b as usize] = [0.0, 0.45];
+        mesh.uvs[c as usize] = [0.5, 1.0];
+        mesh.uvs[d as usize] = [1.0, 0.45];
         if facing.dot(normal) > 0.0 {
             mesh.push_triangle(a, b, c);
             mesh.push_triangle(a, c, d);

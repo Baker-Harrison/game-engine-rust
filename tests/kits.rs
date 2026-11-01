@@ -272,3 +272,16 @@ fn prefab_lods_cut_drawn_triangles_for_distant_instances() {
     assert!(library.stored_triangles() < sphere.triangle_count() * 2);
     assert!(library.flatten(viewer).triangle_count() == library.drawn_triangles(viewer));
 }
+
+#[test]
+fn leaf_texture_has_cutout_alpha_and_glass_is_translucent() {
+    let style = Style::overgrown_manor();
+    let leaf = style.bake_material_maps("leaf", 64).unwrap();
+    let opaque = leaf.albedo.texels.iter().filter(|t| t[3] == 255).count();
+    let clear = leaf.albedo.texels.iter().filter(|t| t[3] == 0).count();
+    assert!(opaque > 64 * 64 / 5 && clear > 64 * 64 / 5, "opaque {} clear {}", opaque, clear);
+    let glass = style.bake_material_maps("glass", 16).unwrap();
+    assert!(glass.albedo.texels.iter().all(|t| t[3] > 40 && t[3] < 90));
+    assert!(glass.packed.get(3, 3)[0] < 30);
+    assert!(style.bake_material_maps("stone_wall", 16).unwrap().albedo.texels.iter().all(|t| t[3] == 255));
+}
