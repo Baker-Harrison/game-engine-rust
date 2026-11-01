@@ -15,6 +15,14 @@ pub struct AssetDefinition {
 pub fn definitions() -> Vec<AssetDefinition> {
     vec![
         AssetDefinition {
+            name: "terrace",
+            summary: "stone terrace with balustrade, columns, arched wall, cornice and iron gate",
+            parameters: &[],
+            build: |_| {
+                crate::model::terrace::build_terrace(&crate::model::style::Style::overgrown_manor()).unwrap_or_else(|error| panic!("{}", error))
+            },
+        },
+        AssetDefinition {
             name: "swatches",
             summary: "one block per material in the overgrown_manor style",
             parameters: &[("cell", 0.012)],

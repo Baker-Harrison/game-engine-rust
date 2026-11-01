@@ -44,7 +44,7 @@ impl Style {
             moss: 0.4,
             grime: 0.85,
             edge_wear: 0.8,
-            moss_color: Vec3::new(0.10, 0.17, 0.05),
+            moss_color: Vec3::new(0.07, 0.12, 0.04),
             grime_color: Vec3::new(0.07, 0.065, 0.06),
             seed: 21,
         };

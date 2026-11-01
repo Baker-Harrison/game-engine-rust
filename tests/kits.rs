@@ -95,3 +95,48 @@ fn triangle_budget_is_enforced() {
     let error = build_styled_part("wall", PartKind::Architecture, &block, &style, "stone_wall", DetailSpec::new(0.03).with_budget(1000), Vec::new()).err().unwrap();
     assert!(error.contains("budget"), "{}", error);
 }
+
+use engine::model::ornament::{arch_opening_wall, balustrade, column, cornice, finial, iron_railing, BalustradeSpec, Ornament};
+
+fn mesh_ornament(ornament: &Ornament) -> Mesh {
+    mesh_sdf(&ornament.sdf, ornament.smallest_feature / 3.0, Vec3::splat(0.5))
+}
+
+#[test]
+fn ornaments_mesh_to_closed_surfaces() {
+    let list = [
+        ("finial", finial(0.3, 0.1)),
+        ("column", column(2.0, 0.2, 12)),
+        ("cornice", cornice(1.0, 0.3, 0.4)),
+        ("arch", arch_opening_wall(2.0, 2.6, 0.4, 1.0, 1.9)),
+    ];
+    for (name, ornament) in list {
+        let report = mesh_ornament(&ornament).topology_report();
+        assert!(report.watertight, "{} open {} nonmanifold {}", name, report.open_edges, report.nonmanifold_edges);
+    }
+}
+
+#[test]
+fn balustrade_has_a_baluster_every_spacing() {
+    let spec = BalustradeSpec::terrace(2.0);
+    let ornament = balustrade(&spec);
+    let mesh = mesh_sdf(&ornament.sdf, 0.012, Vec3::splat(0.5));
+    let bvh = Bvh::from_meshes(&[&mesh]);
+    let mut hits = 0;
+    let mut x = 0.4;
+    while x < 1.6 {
+        if bvh.any_hit(Vec3::new(x, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0), 2.0) {
+            hits += 1;
+        }
+        x += 0.01;
+    }
+    assert!(hits > 20 && hits < 80, "ray hits {}", hits);
+}
+
+#[test]
+fn iron_railing_is_a_see_through_silhouette() {
+    let ornament = iron_railing(1.0, 1.4, 0.012, 0.11);
+    let mesh = mesh_sdf(&ornament.sdf, 0.006, Vec3::splat(0.3));
+    let stats = MeshStats::measure(&mesh);
+    assert!(stats.silhouette_convexity[2] < 0.5, "{}", stats.silhouette_convexity[2]);
+}
