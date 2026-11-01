@@ -52,6 +52,9 @@ fn real_main(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
+    if cmd == "props" {
+        return props_command();
+    }
     if cmd == "textures" {
         return textures_command(&args[1..]);
     }
@@ -139,6 +142,25 @@ fn real_main(args: &[String]) -> Result<(), String> {
         let options = engine::runner::RunOptions { width, height, renderer: renderer.to_string(), max_frames, audio: false, seed: 1 };
         engine::runner::run(&mut viewer, &options)
     }
+}
+
+fn props_command() -> Result<(), String> {
+    let style = engine::model::style::Style::desert_industrial();
+    for name in engine::model::industrial::prop_names() {
+        let started = std::time::Instant::now();
+        let prop = engine::model::industrial::build_prop(name, &style)?;
+        let triangles: usize = prop.asset.parts.iter().map(|p| p.mesh.triangle_count()).sum();
+        println!(
+            "{:<18} {:>6.2}s {:>8} tris  footprint {:.2} x {:.2} m  top {:.2} m",
+            name,
+            started.elapsed().as_secs_f32(),
+            triangles,
+            prop.footprint_half.0 * 2.0,
+            prop.footprint_half.1 * 2.0,
+            prop.top_height
+        );
+    }
+    Ok(())
 }
 
 fn textures_command(rest: &[String]) -> Result<(), String> {

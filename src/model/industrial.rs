@@ -16,16 +16,16 @@ pub enum Detail {
 }
 
 impl Detail {
-    fn feature_scale(self) -> f32 {
+    fn cells_per_feature(self) -> f32 {
         match self {
-            Detail::Game => 1.6,
-            Detail::Hero => 1.0,
+            Detail::Game => 2.2,
+            Detail::Hero => 3.0,
         }
     }
 
     fn minimum_bar_radius(self) -> f32 {
         match self {
-            Detail::Game => 0.04,
+            Detail::Game => 0.05,
             Detail::Hero => 0.0,
         }
     }
@@ -40,6 +40,12 @@ pub struct Prop {
     pub asset: Asset,
     pub footprint_half: (f32, f32),
     pub top_height: f32,
+}
+
+impl Prop {
+    pub fn prefab(&self, triangle_ratios: &[f32], switch_distances: &[f32]) -> super::instancing::Prefab {
+        super::instancing::Prefab::from_mesh(&self.name, &self.asset.merged_mesh(&[]), triangle_ratios, switch_distances)
+    }
 }
 
 pub fn prop_names() -> Vec<&'static str> {
@@ -76,14 +82,18 @@ impl<'a> Builder<'a> {
         Builder { style, asset: Asset::new(name), detail: current_detail() }
     }
 
+    fn spec(&self, feature: f32) -> DetailSpec {
+        DetailSpec { cells_per_feature: self.detail.cells_per_feature(), ..DetailSpec::new(feature).with_budget(700_000) }
+    }
+
     fn add(&mut self, name: &str, sdf: &Sdf, material: &str, feature: f32) -> Result<(), String> {
-        let detail = DetailSpec::new(feature * self.detail.feature_scale()).with_budget(700_000);
+        let detail = self.spec(feature);
         self.asset.parts.push(build_styled_part(name, PartKind::Object, sdf, self.style, material, detail, Vec::new())?);
         Ok(())
     }
 
     fn add_flat(&mut self, name: &str, sdf: &Sdf, material: &str, feature: f32) -> Result<(), String> {
-        let detail = DetailSpec::new(feature * self.detail.feature_scale()).with_budget(700_000);
+        let detail = self.spec(feature);
         self.asset.parts.push(build_styled_part(name, PartKind::Object, sdf, self.style, material, detail, Vec::new())?);
         Ok(())
     }
@@ -151,8 +161,8 @@ fn container(style: &Style, length: f32, paint: &str) -> Result<Prop, String> {
     }
     door_detail.push(Sdf::round_box(v(0.04, h - 0.4, 0.02), 0.005).translate(v(door_x + 0.05, h * 0.5, 0.0)));
     b.add_flat("frame", &Sdf::smooth_union_all(frame, 0.01), paint, 0.09)?;
-    b.add("side_a", &side, paint, 0.08)?;
-    b.add("side_b", &other, paint, 0.08)?;
+    b.add("side_a", &side, paint, 0.1)?;
+    b.add("side_b", &other, paint, 0.1)?;
     b.add("door_hardware", &Sdf::smooth_union_all(door_detail, 0.006), "steel", 0.04)?;
     Ok(b.finish())
 }
@@ -161,13 +171,13 @@ fn fuel_tank(style: &Style) -> Result<Prop, String> {
     let (radius, height) = (5.0, 8.0);
     let mut b = Builder::new("fuel_tank", style);
     let shell = Sdf::cylinder(radius, height * 0.5, 0.08).translate(v(0.0, height * 0.5, 0.0));
-    let rim = Sdf::cylinder(radius + 0.12, 0.08, 0.04).translate(v(0.0, height + 0.08, 0.0));
-    let seam = |y: f32| Sdf::cylinder(radius + 0.04, 0.05, 0.02).translate(v(0.0, y, 0.0));
+    let rim = Sdf::cylinder(radius + 0.12, 0.1, 0.04).translate(v(0.0, height + 0.08, 0.0));
+    let seam = |y: f32| Sdf::cylinder(radius + 0.05, 0.1, 0.03).translate(v(0.0, y, 0.0));
     let mut tank = vec![shell, rim];
     for level in 1..4 {
         tank.push(seam(level as f32 * height * 0.25));
     }
-    b.add_flat("shell", &Sdf::smooth_union_all(tank, 0.02), "steel", 0.15)?;
+    b.add_flat("shell", &Sdf::smooth_union_all(tank, 0.02), "steel", 0.2)?;
     let rung_count = 24usize;
     let ladder_x = radius + 0.28;
     let rails = bar(v(ladder_x, 0.2, -0.25), v(ladder_x, height + 0.9, -0.25), 0.025).union(bar(v(ladder_x, 0.2, 0.25), v(ladder_x, height + 0.9, 0.25), 0.025));
@@ -180,7 +190,7 @@ fn fuel_tank(style: &Style) -> Result<Prop, String> {
     ladder.push(standoff(1.5));
     ladder.push(standoff(4.5));
     ladder.push(standoff(7.5));
-    b.add("ladder", &Sdf::smooth_union_all(ladder, 0.01), "rusted_steel", 0.04)?;
+    b.add("ladder", &Sdf::smooth_union_all(ladder, 0.01), "rusted_steel", 0.1)?;
     let stub = Sdf::cylinder(0.22, 0.6, 0.02).rotate_z(90.0).translate(v(-radius - 0.5, 0.7, 0.0));
     let flange = Sdf::cylinder(0.32, 0.05, 0.01).rotate_z(90.0).translate(v(-radius - 1.05, 0.7, 0.0));
     let valve = Sdf::cylinder(0.12, 0.15, 0.02).translate(v(-radius - 0.5, 1.05, 0.0));
@@ -208,7 +218,7 @@ fn derrick(style: &Style) -> Result<Prop, String> {
             members.push(bar(corner(a.0, a.1, y1), corner(c.0, c.1, y1), 0.05));
         }
     }
-    b.add("lattice", &Sdf::smooth_union_all(members, 0.02), "olive_metal", 0.08)?;
+    b.add("lattice", &Sdf::smooth_union_all(members, 0.02), "olive_metal", 0.1)?;
     let deck_half = half_at(deck) + 0.6;
     let platform = Sdf::round_box(v(deck_half * 2.0, 0.12, deck_half * 2.0), 0.02).translate(v(0.0, deck, 0.0));
     let mut railing = Vec::new();
@@ -222,7 +232,7 @@ fn derrick(style: &Style) -> Result<Prop, String> {
         }
     }
     b.add("deck", &platform, "steel", 0.1)?;
-    b.add("railing", &Sdf::smooth_union_all(railing, 0.01), "steel", 0.05)?;
+    b.add("railing", &Sdf::smooth_union_all(railing, 0.01), "steel", 0.1)?;
     let crown = Sdf::round_box(v(1.0, 0.6, 1.0), 0.05).translate(v(0.0, height + 0.3, 0.0)).union(Sdf::cylinder(0.3, 0.15, 0.03).rotate_x(90.0).translate(v(0.0, height + 0.9, 0.0)));
     b.add("crown", &crown, "rusted_steel", 0.1)?;
     Ok(b.finish())
@@ -268,7 +278,7 @@ fn office(style: &Style) -> Result<Prop, String> {
     let side = wall_with_openings(d, h, &[window(3.0)]);
     let side_plain = wall_with_openings(d, h, &[]);
     let mut place = |name: &str, ornament: &super::ornament::Ornament, position: Vec3, yaw: f32| -> Result<(), String> {
-        let detail = DetailSpec::new(ornament.smallest_feature * 1.6).with_budget(700_000);
+        let detail = DetailSpec { cells_per_feature: 2.2, ..DetailSpec::new(ornament.smallest_feature.max(0.12)).with_budget(700_000) };
         let mut part = build_styled_part(name, PartKind::Architecture, &ornament.sdf, style, "office_wall", detail, Vec::new())?;
         part.mesh.rotate_y(yaw);
         part.mesh.translate(position);
@@ -287,7 +297,7 @@ fn office(style: &Style) -> Result<Prop, String> {
     ];
     for (name, opening, origin, yaw) in openings {
         for (kind, ornament, material) in [("frame", window_frame(&opening), "timber"), ("glass", window_glass(&opening), "glass")] {
-            let detail = DetailSpec::new(ornament.smallest_feature * 1.6).with_budget(200_000);
+            let detail = DetailSpec { cells_per_feature: 2.2, ..DetailSpec::new(ornament.smallest_feature).with_budget(200_000) };
             let mut part = build_styled_part(&format!("{}_{}", name, kind), PartKind::Architecture, &ornament.sdf, style, material, detail, Vec::new())?;
             part.mesh.translate(v(opening.x, opening.sill, 0.0));
             part.mesh.rotate_y(yaw);
@@ -306,7 +316,7 @@ fn office(style: &Style) -> Result<Prop, String> {
     let rise = h + 0.3;
     let stair_spec = StairSpec { total_rise: rise, width: 1.0, run: 0.28 };
     let steps = stairs(&stair_spec)?;
-    let detail = DetailSpec::new(steps.smallest_feature * 1.6).with_budget(300_000);
+    let detail = DetailSpec { cells_per_feature: 2.2, ..DetailSpec::new(steps.smallest_feature).with_budget(300_000) };
     let mut flight = build_styled_part("roof_stairs", PartKind::Object, &steps.sdf, style, "concrete", detail, Vec::new())?;
     flight.mesh.rotate_y(90.0);
     flight.mesh.translate(v(w * 0.5 + 0.5 + stair_spec.length(), 0.0, 0.0));
@@ -401,7 +411,7 @@ fn catwalk(style: &Style) -> Result<Prop, String> {
     }
     b.add("grating", &grating, "steel", 0.04)?;
     b.add("frame", &Sdf::smooth_union_all(frame, 0.008), "steel", 0.06)?;
-    b.add("railing", &Sdf::smooth_union_all(railing, 0.008), "steel", 0.05)?;
+    b.add("railing", &Sdf::smooth_union_all(railing, 0.008), "steel", 0.1)?;
     Ok(b.finish())
 }
 
@@ -450,7 +460,7 @@ fn water_tower(style: &Style) -> Result<Prop, String> {
     for i in 0..30 {
         ladder.push(bar(v(2.3, 0.3 + i as f32 * 0.37, -0.25), v(2.3, 0.3 + i as f32 * 0.37, 0.25), 0.018));
     }
-    b.add("ladder", &Sdf::smooth_union_all(ladder, 0.008), "rusted_steel", 0.04)?;
+    b.add("ladder", &Sdf::smooth_union_all(ladder, 0.008), "rusted_steel", 0.1)?;
     Ok(b.finish())
 }
 
