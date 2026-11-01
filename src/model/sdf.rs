@@ -1,5 +1,7 @@
 use crate::math::Vec3;
 
+const SWEEP_OVERLAP: f32 = 0.75;
+
 pub type Bounds = (Vec3, Vec3);
 
 #[derive(Clone, Copy)]
@@ -43,11 +45,17 @@ pub struct Limb {
 
 impl Limb {
     pub fn new(start: Vec3, end: Vec3, half_start: [f32; 2], half_end: [f32; 2], radius: f32) -> Limb {
+        let axis = (end - start).normalized();
+        let reference = if axis.y.abs() > 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+        let side = reference.cross(axis).normalized();
+        Limb::with_side(start, end, half_start, half_end, radius, side)
+    }
+
+    pub fn with_side(start: Vec3, end: Vec3, half_start: [f32; 2], half_end: [f32; 2], radius: f32, width_direction: Vec3) -> Limb {
         let span = end - start;
         let length = span.length();
         let axis = span.normalized();
-        let reference = if axis.y.abs() > 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
-        let side = reference.cross(axis).normalized();
+        let side = (width_direction - axis * width_direction.dot(axis)).normalized();
         let depth = axis.cross(side);
         Limb { start, end, axis, side, depth, length, half_start, half_end, radius }
     }
@@ -132,6 +140,52 @@ impl Sdf {
 
     pub fn limb(start: Vec3, end: Vec3, half_start: [f32; 2], half_end: [f32; 2], radius: f32) -> Sdf {
         Sdf::Limb(Limb::new(start, end, half_start, half_end, radius))
+    }
+
+    pub fn sweep(path: &[Vec3], half_sizes: &[[f32; 2]], radius: f32, subdivisions: usize, width_direction: Vec3) -> Sdf {
+        let steps = subdivisions.max(1);
+        let span_count = path.len() - 1;
+        let at = |index: isize| path[index.clamp(0, span_count as isize) as usize];
+        let mut points = Vec::new();
+        let mut sizes = Vec::new();
+        for span in 0..span_count {
+            for step in 0..steps {
+                let t = step as f32 / steps as f32;
+                let (p0, p1, p2, p3) = (at(span as isize - 1), at(span as isize), at(span as isize + 1), at(span as isize + 2));
+                points.push(catmull_rom(p0, p1, p2, p3, t));
+                sizes.push([
+                    half_sizes[span][0] + (half_sizes[span + 1][0] - half_sizes[span][0]) * t,
+                    half_sizes[span][1] + (half_sizes[span + 1][1] - half_sizes[span][1]) * t,
+                ]);
+            }
+        }
+        points.push(path[span_count]);
+        sizes.push(half_sizes[span_count]);
+        let last = points.len() - 2;
+        let limbs: Vec<Sdf> = (0..points.len() - 1)
+            .map(|i| {
+                let span = points[i + 1] - points[i];
+                let direction = span.normalized();
+                let overlap = span.length() * SWEEP_OVERLAP;
+                let start_overlap = if i == 0 { 0.0 } else { overlap };
+                let end_overlap = if i == last { 0.0 } else { overlap };
+                let extrapolate = |from: [f32; 2], to: [f32; 2], amount: f32| {
+                    let fraction = amount / span.length();
+                    [from[0] + (to[0] - from[0]) * fraction, from[1] + (to[1] - from[1]) * fraction]
+                };
+                Sdf::Limb(Limb::with_side(
+                    points[i] - direction * start_overlap,
+                    points[i + 1] + direction * end_overlap,
+                    extrapolate(sizes[i], sizes[i + 1], -start_overlap),
+                    extrapolate(sizes[i], sizes[i + 1], span.length() + end_overlap),
+                    radius,
+                    width_direction,
+                ))
+            })
+            .collect();
+        let mut iterator = limbs.into_iter();
+        let first = iterator.next().expect("sweep needs at least two points");
+        iterator.fold(first, |accumulated, limb| accumulated.union(limb))
     }
 
     pub fn union(self, other: Sdf) -> Sdf {
@@ -446,4 +500,9 @@ fn polygon_distance(points: &[[f32; 2]], p: [f32; 2]) -> f32 {
         }
     }
     sign * nearest.sqrt()
+}
+
+fn catmull_rom(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: f32) -> Vec3 {
+    let (t2, t3) = (t * t, t * t * t);
+    (p1 * 2.0 + (p2 - p0) * t + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3) * 0.5
 }

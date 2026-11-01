@@ -107,7 +107,7 @@ pub fn definitions() -> Vec<AssetDefinition> {
         AssetDefinition {
             name: "carbine",
             summary: "hard-surface carbine prop built from extrusions, revolves, arrays and boolean cuts",
-            parameters: &[("cell", 0.002)],
+            parameters: &[("cell", 0.0016)],
             build: |p| build_carbine(p.get("cell")),
         },
         AssetDefinition {

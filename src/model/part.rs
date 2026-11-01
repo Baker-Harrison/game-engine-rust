@@ -1,7 +1,8 @@
 use super::bake::{bake, BakeSettings};
 use super::bvh::Bvh;
 use super::mesh::Mesh;
-use super::mesher::mesh_sdf;
+use super::mesher::{mesh_sdf, mesh_sdf_painted};
+use super::paint::SurfacePaint;
 use super::sdf::Sdf;
 use crate::camera::Camera;
 use crate::math::Vec3;
@@ -39,6 +40,10 @@ pub struct Part {
 impl Part {
     pub fn from_sdf(name: &str, kind: PartKind, sdf: &Sdf, cell: f32, color: Vec3, members: Vec<Member>) -> Part {
         Part { name: name.to_string(), kind, mesh: mesh_sdf(sdf, cell, color), members }
+    }
+
+    pub fn from_sdf_painted(name: &str, kind: PartKind, sdf: &Sdf, cell: f32, paint: SurfacePaint, members: Vec<Member>) -> Part {
+        Part { name: name.to_string(), kind, mesh: mesh_sdf_painted(sdf, cell, &|sample| paint.color_at(sample)), members }
     }
 
     pub fn from_mesh(name: &str, kind: PartKind, mesh: Mesh) -> Part {
@@ -141,6 +146,7 @@ pub struct Asset {
     pub doors: Vec<DoorLink>,
     pub views: Vec<View>,
     pub roof_part_names: Vec<String>,
+    pub studio_lighting: bool,
 }
 
 impl Asset {
@@ -169,6 +175,14 @@ impl Asset {
         self.parts.append(&mut other.parts);
         self.dimensions.append(&mut other.dimensions);
         Footprint { subject: prefix.to_string(), min_x: low.x, max_x: high.x, min_z: low.z, max_z: high.z }
+    }
+
+    pub fn default_bake_settings(&self) -> BakeSettings {
+        if self.studio_lighting {
+            BakeSettings::studio()
+        } else {
+            BakeSettings::default()
+        }
     }
 
     pub fn merged_mesh(&self, excluded_parts: &[String]) -> Mesh {

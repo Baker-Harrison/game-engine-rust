@@ -4,6 +4,7 @@ pub mod bvh;
 pub mod furniture;
 pub mod mesh;
 pub mod mesher;
+pub mod paint;
 pub mod params;
 pub mod part;
 pub mod props;

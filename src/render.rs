@@ -20,6 +20,26 @@ impl Framebuffer {
         Framebuffer { width, height, pixels: vec![0; width * height], depth: vec![0.0; width * height] }
     }
 
+    pub fn downsampled(&self, factor: usize) -> Framebuffer {
+        let mut result = Framebuffer::new(self.width / factor, self.height / factor);
+        let samples = (factor * factor) as u32;
+        for y in 0..result.height {
+            for x in 0..result.width {
+                let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+                for sy in 0..factor {
+                    for sx in 0..factor {
+                        let pixel = self.pixels[(y * factor + sy) * self.width + x * factor + sx];
+                        r += (pixel >> 16) & 255;
+                        g += (pixel >> 8) & 255;
+                        b += pixel & 255;
+                    }
+                }
+                result.pixels[y * result.width + x] = ((r / samples) << 16) | ((g / samples) << 8) | (b / samples);
+            }
+        }
+        result
+    }
+
     pub fn clear(&mut self, color: Vec3) {
         let c = pack(color);
         self.pixels.iter_mut().for_each(|p| *p = c);

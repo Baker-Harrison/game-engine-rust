@@ -164,3 +164,57 @@ fn carbine_prop_is_a_closed_solid_with_expected_length() {
     let (low, high) = carbine.object_bounds();
     assert!((high.x - low.x - 0.83).abs() < 0.05);
 }
+
+#[test]
+fn sweep_follows_a_curve_and_stays_smooth() {
+    let path = [v(0.0, 0.0, 0.0), v(0.0, -0.05, 0.0), v(0.02, -0.1, 0.0), v(0.06, -0.14, 0.0)];
+    let sizes = [[0.012, 0.02], [0.012, 0.02], [0.011, 0.019], [0.011, 0.019]];
+    let sweep = Sdf::sweep(&path, &sizes, 0.003, 6, v(0.0, 0.0, 1.0));
+    let mesh = mesh_sdf(&sweep, 0.002, v(1.0, 1.0, 1.0));
+    let report = mesh.topology_report();
+    assert!(report.watertight);
+    assert!(report.max_edge_angle_degrees < 60.0, "scalloped: {}", report.max_edge_angle_degrees);
+    assert!(sweep.distance(v(0.02, -0.1, 0.0)) < 0.0);
+    assert!(sweep.distance(v(0.06, -0.02, 0.0)) > 0.0);
+}
+
+#[test]
+fn edge_wear_lightens_convex_edges_only() {
+    use engine::model::mesher::mesh_sdf_painted;
+    use engine::model::paint::SurfacePaint;
+    let paint = SurfacePaint::worn(v(0.1, 0.1, 0.1), v(0.9, 0.9, 0.9));
+    let plain = SurfacePaint { grain: 0.0, ..paint };
+    let shape = Sdf::round_box(v(0.1, 0.1, 0.1), 0.004);
+    let mesh = mesh_sdf_painted(&shape, 0.002, &|sample| plain.color_at(sample));
+    let brightness = |index: usize| mesh.colors[index].x;
+    let face_center = (0..mesh.positions.len()).filter(|i| mesh.positions[*i].x.abs() < 0.01 && mesh.positions[*i].y.abs() < 0.01 && mesh.positions[*i].z > 0.04).map(brightness).fold(0.0f32, f32::max);
+    let edge = (0..mesh.positions.len()).filter(|i| mesh.positions[*i].x > 0.045 && mesh.positions[*i].y > 0.045).map(brightness).fold(0.0f32, f32::max);
+    assert!(edge > face_center + 0.2, "edge {} face {}", edge, face_center);
+}
+
+#[test]
+fn studio_lighting_brightens_the_side_facing_away_from_the_sun() {
+    use engine::model::bake::{bake, BakeSettings};
+    let mut sun_mesh = Mesh::new();
+    sun_mesh.add_box(v(0.0, 0.5, 0.0), v(1.0, 1.0, 1.0), v(0.5, 0.5, 0.5));
+    let mut studio_mesh = sun_mesh.clone();
+    let occluders = Bvh::from_meshes(&[&sun_mesh.clone()]);
+    bake(&mut sun_mesh, &occluders, &BakeSettings::default());
+    bake(&mut studio_mesh, &occluders, &BakeSettings::studio());
+    let facing_away = |mesh: &Mesh| (0..mesh.positions.len()).filter(|i| mesh.normals[*i].x < -0.9).map(|i| mesh.colors[i].x).fold(0.0f32, f32::max);
+    assert!(facing_away(&studio_mesh) > facing_away(&sun_mesh));
+}
+
+#[test]
+fn downsampling_averages_blocks() {
+    let mut frame = Framebuffer::new(4, 2);
+    frame.clear(v(1.0, 1.0, 1.0));
+    for x in 0..2 {
+        for y in 0..2 {
+            frame.pixels[y * 4 + x] = 0;
+        }
+    }
+    let small = frame.downsampled(2);
+    assert_eq!(small.pixels[0], 0);
+    assert_eq!(small.pixels[1], 0xFFFFFF);
+}

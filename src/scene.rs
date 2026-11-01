@@ -125,7 +125,7 @@ impl Scene {
                         .collect::<Result<Vec<_>, String>>()
                         .map_err(|e| err(&e))?;
                     let asset = crate::assets::build(name, &overrides).map_err(|e| err(&e))?;
-                    let mut mesh = asset.baked_mesh(&["stage_floor".to_string()], &crate::model::bake::BakeSettings::default());
+                    let mut mesh = asset.baked_mesh(&["stage_floor".to_string()], &asset.default_bake_settings());
                     mesh.rotate_y(kv_f32(&t, "yaw").unwrap_or(0.0));
                     mesh.translate(kv_vec3(&t, "pos").unwrap_or(Vec3::ZERO));
                     s.placed_meshes.push(mesh);
