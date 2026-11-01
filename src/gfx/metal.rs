@@ -117,6 +117,7 @@ impl MetalRenderer {
             send!((); layer, "setDevice:", Id = device);
             send!((); layer, "setPixelFormat:", usize = BGRA8);
             send!((); layer, "setFramebufferOnly:", bool = true);
+            send!((); layer, "setContentsScale:", f64 = window.scale_factor() as f64);
             send!((); layer, "setDrawableSize:", CGSize = CGSize { w: w as f64, h: h as f64 });
             send!((); view, "setLayer:", Id = layer);
             send!((); view, "setWantsLayer:", bool = true);

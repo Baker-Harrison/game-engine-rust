@@ -45,6 +45,7 @@ pub struct SimResult {
 pub fn simulate(game: &mut dyn Game, options: &SimOptions) -> Result<SimResult, String> {
     let mut engine = Engine::new(options.seed);
     game.setup(&mut engine)?;
+    engine.ui.set_target(options.width, options.height);
     let mut input = Input::new();
     let wants_frames = options.capture_every.is_some() || !options.capture_at.is_empty();
     let mut renderer = if wants_frames {

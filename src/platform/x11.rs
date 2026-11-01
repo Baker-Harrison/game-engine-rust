@@ -124,10 +124,13 @@ pub struct X11Window {
     wm_delete: c_ulong,
     blank_cursor: c_ulong,
     captured: bool,
+    scale: f32,
 }
 
 impl X11Window {
     pub fn new(title: &str, w: usize, h: usize) -> Result<X11Window, String> {
+        let scale = display_scale();
+        let (w, h) = ((w as f32 * scale).round() as usize, (h as f32 * scale).round() as usize);
         unsafe {
             let x = Xlib::load()?;
             let d = (x.XOpenDisplay)(std::ptr::null());
@@ -160,7 +163,7 @@ impl X11Window {
             let blank_cursor = (x.XCreatePixmapCursor)(d, bm, bm, &mut col, &mut col2, 0, 0);
             (x.XFlush)(d);
             let gc = (x.XDefaultGC)(d, s);
-            Ok(X11Window { x, d, win, gc, image, buf, w, h, wm_delete, blank_cursor, captured: false })
+            Ok(X11Window { x, d, win, gc, image, buf, w, h, wm_delete, blank_cursor, captured: false, scale })
         }
     }
 
@@ -241,6 +244,10 @@ impl Window for X11Window {
         NativeHandle::X11 { display: self.d, window: self.win as u64 }
     }
 
+    fn scale_factor(&self) -> f32 {
+        self.scale
+    }
+
     fn size(&self) -> (usize, usize) {
         (self.w, self.h)
     }
@@ -263,4 +270,13 @@ impl Window for X11Window {
             (self.x.XFlush)(self.d);
         }
     }
+}
+
+fn display_scale() -> f32 {
+    ["ENGINE_UI_SCALE", "GDK_SCALE"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .filter_map(|value| value.parse::<f32>().ok())
+        .find(|scale| *scale >= 1.0 && *scale <= 4.0)
+        .unwrap_or(1.0)
 }

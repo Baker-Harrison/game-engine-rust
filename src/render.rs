@@ -1,7 +1,7 @@
 
 use crate::camera::Camera;
 use crate::math::{clamp, Vec3};
-use crate::scene::{OverlayRect, Scene};
+use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene};
 use std::io::Write;
 
 #[derive(Clone)]
@@ -152,19 +152,62 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
     draw_overlay(fb, &scene.overlay);
 }
 
-fn draw_overlay(fb: &mut Framebuffer, rects: &[OverlayRect]) {
+fn draw_overlay(fb: &mut Framebuffer, items: &[OverlayItem]) {
+    for item in items {
+        match item {
+            OverlayItem::Rect(rect) => draw_overlay_rect(fb, rect),
+            OverlayItem::Tri(tri) => draw_overlay_tri(fb, tri),
+        }
+    }
+}
+
+fn draw_overlay_rect(fb: &mut Framebuffer, rect: &OverlayRect) {
     let (width, height) = (fb.width as f32, fb.height as f32);
-    for rect in rects {
-        let x0 = (rect.min.0 * width).round().max(0.0) as usize;
-        let x1 = ((rect.max.0 * width).round().max(0.0) as usize).min(fb.width);
-        let y0 = (rect.min.1 * height).round().max(0.0) as usize;
-        let y1 = ((rect.max.1 * height).round().max(0.0) as usize).min(fb.height);
-        let top = pack(rect.color);
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let index = y * fb.width + x;
-                fb.pixels[index] = if rect.alpha >= 0.999 { top } else { blend(fb.pixels[index], rect.color, rect.alpha) };
+    let x0 = (rect.min.0 * width).round().max(0.0) as usize;
+    let x1 = ((rect.max.0 * width).round().max(0.0) as usize).min(fb.width);
+    let y0 = (rect.min.1 * height).round().max(0.0) as usize;
+    let y1 = ((rect.max.1 * height).round().max(0.0) as usize).min(fb.height);
+    let top = pack(rect.color);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = y * fb.width + x;
+            fb.pixels[index] = if rect.alpha >= 0.999 { top } else { blend(fb.pixels[index], rect.color, rect.alpha) };
+        }
+    }
+}
+
+fn draw_overlay_tri(fb: &mut Framebuffer, tri: &OverlayTri) {
+    let (width, height) = (fb.width as f32, fb.height as f32);
+    let p = [
+        (tri.points[0].0 * width, tri.points[0].1 * height),
+        (tri.points[1].0 * width, tri.points[1].1 * height),
+        (tri.points[2].0 * width, tri.points[2].1 * height),
+    ];
+    let area = (p[1].0 - p[0].0) * (p[2].1 - p[0].1) - (p[1].1 - p[0].1) * (p[2].0 - p[0].0);
+    if area.abs() < 1e-9 {
+        return;
+    }
+    let min_x = p.iter().fold(f32::MAX, |m, q| m.min(q.0)).floor().max(0.0) as i32;
+    let max_x = p.iter().fold(f32::MIN, |m, q| m.max(q.0)).ceil().min(width - 1.0) as i32;
+    let min_y = p.iter().fold(f32::MAX, |m, q| m.min(q.1)).floor().max(0.0) as i32;
+    let max_y = p.iter().fold(f32::MIN, |m, q| m.max(q.1)).ceil().min(height - 1.0) as i32;
+    let inverse = 1.0 / area;
+    for y in min_y..=max_y {
+        let py = y as f32 + 0.5;
+        for x in min_x..=max_x {
+            let px = x as f32 + 0.5;
+            let w0 = ((p[1].0 - px) * (p[2].1 - py) - (p[1].1 - py) * (p[2].0 - px)) * inverse;
+            let w1 = ((p[2].0 - px) * (p[0].1 - py) - (p[2].1 - py) * (p[0].0 - px)) * inverse;
+            let w2 = 1.0 - w0 - w1;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
             }
+            let alpha = w0 * tri.alpha[0] + w1 * tri.alpha[1] + w2 * tri.alpha[2];
+            if alpha <= 0.002 {
+                continue;
+            }
+            let index = y as usize * fb.width + x as usize;
+            fb.pixels[index] = blend(fb.pixels[index], tri.color, alpha.min(1.0));
         }
     }
 }
