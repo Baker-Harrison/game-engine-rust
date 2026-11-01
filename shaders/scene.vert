@@ -2,6 +2,7 @@
 layout(location = 0) in vec4 pos;
 layout(location = 1) in vec4 normal;
 layout(location = 2) in vec4 color;
+layout(location = 3) in vec4 uvm;
 layout(push_constant) uniform U {
     mat4 view_proj;
     vec4 eye;
@@ -14,6 +15,9 @@ layout(location = 1) out vec3 nrm;
 layout(location = 2) out vec4 col;
 layout(location = 3) out float depth;
 layout(location = 4) out float kind;
+layout(location = 5) out vec2 uv;
+layout(location = 6) flat out float layer;
+layout(location = 7) flat out float mode;
 void main() {
     vec4 p = u.view_proj * vec4(pos.xyz, 1.0);
     if (normal.w > 1.5) {
@@ -25,4 +29,7 @@ void main() {
     col = color;
     depth = p.w;
     kind = normal.w;
+    uv = uvm.xy;
+    layer = uvm.z;
+    mode = uvm.w;
 }

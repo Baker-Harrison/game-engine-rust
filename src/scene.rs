@@ -7,13 +7,15 @@ pub struct Tri {
     pub n: [Vec3; 3],
     pub c: [Vec3; 3],
     pub s: [[f32; 2]; 3],
+    pub t: [[f32; 2]; 3],
+    pub material: u16,
     pub unlit: bool,
 }
 
 impl Tri {
     pub fn flat(v: [Vec3; 3], color: Vec3) -> Tri {
         let normal = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
-        Tri { v, n: [normal; 3], c: [color; 3], s: [[0.85, 0.0]; 3], unlit: false }
+        Tri { v, n: [normal; 3], c: [color; 3], s: [[0.85, 0.0]; 3], t: [[0.0; 2]; 3], material: 0, unlit: false }
     }
 
     pub fn glowing(v: [Vec3; 3], color: Vec3) -> Tri {
@@ -57,7 +59,22 @@ pub struct Ground {
     pub color_b: Vec3,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AlphaMode {
+    Opaque,
+    Cutout,
+    Blend,
+}
+
+pub struct SurfaceMaps {
+    pub alpha_mode: AlphaMode,
+    pub albedo: crate::mips::MipTexture,
+    pub normal: crate::mips::MipTexture,
+    pub packed: crate::mips::MipTexture,
+}
+
 pub struct Scene {
+    pub materials: Vec<SurfaceMaps>,
     pub sky: Vec3,
     pub fog: f32,
     pub ground: Option<Ground>,
@@ -72,6 +89,7 @@ pub struct Scene {
 impl Scene {
     pub fn empty(sky: Vec3, fog: f32) -> Scene {
         Scene {
+            materials: Vec::new(),
             sky,
             fog,
             ground: None,
@@ -90,7 +108,37 @@ impl Scene {
         scene
     }
 
+    pub fn add_material(&mut self, albedo: &crate::texture::Texture, normal: &crate::texture::Texture, packed: &crate::texture::Texture) -> u16 {
+        self.add_material_alpha(albedo, normal, packed, AlphaMode::Opaque)
+    }
+
+    pub fn add_material_alpha(&mut self, albedo: &crate::texture::Texture, normal: &crate::texture::Texture, packed: &crate::texture::Texture, alpha_mode: AlphaMode) -> u16 {
+        self.materials.push(SurfaceMaps {
+            alpha_mode,
+            albedo: crate::mips::MipTexture::new(albedo),
+            normal: crate::mips::MipTexture::new(normal),
+            packed: crate::mips::MipTexture::new(packed),
+        });
+        self.materials.len() as u16
+    }
+
+    pub fn is_blended(&self, tri: &Tri) -> bool {
+        !tri.unlit && tri.material > 0 && self.materials.get(tri.material as usize - 1).map_or(false, |m| m.alpha_mode == AlphaMode::Blend)
+    }
+
+    pub fn alpha_mode_of(&self, tri: &Tri) -> AlphaMode {
+        if tri.unlit || tri.material == 0 {
+            return AlphaMode::Opaque;
+        }
+        self.materials.get(tri.material as usize - 1).map_or(AlphaMode::Opaque, |m| m.alpha_mode)
+    }
+
     pub fn add_mesh(&mut self, mesh: &crate::model::mesh::Mesh) {
+        self.add_mesh_textured(mesh, 0);
+    }
+
+    pub fn add_mesh_textured(&mut self, mesh: &crate::model::mesh::Mesh, material: u16) {
+        let uv = |i: usize| mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
         for triangle in mesh.indices.chunks(3) {
             let at = |k: usize| triangle[k] as usize;
             self.tris.push(Tri {
@@ -98,6 +146,8 @@ impl Scene {
                 n: [mesh.normals[at(0)], mesh.normals[at(1)], mesh.normals[at(2)]],
                 c: [mesh.colors[at(0)], mesh.colors[at(1)], mesh.colors[at(2)]],
                 s: [mesh.surfaces[at(0)], mesh.surfaces[at(1)], mesh.surfaces[at(2)]],
+                t: [uv(at(0)), uv(at(1)), uv(at(2))],
+                material,
                 unlit: false,
             });
         }

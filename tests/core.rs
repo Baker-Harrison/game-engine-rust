@@ -6,7 +6,7 @@ use engine::scene::Scene;
 
 #[test]
 fn gpu_struct_layouts_match_shaders() {
-    assert_eq!(std::mem::size_of::<Vertex>(), 48);
+    assert_eq!(std::mem::size_of::<Vertex>(), 64);
     assert_eq!(std::mem::size_of::<FrameUniforms>(), 128);
 }
 

@@ -1,3 +1,4 @@
+use crate::rig::BotRig;
 use engine::math::Vec3;
 use engine::model::mesh::Mesh;
 use engine::model::mesher::mesh_sdf;
@@ -26,6 +27,7 @@ pub struct BotModel {
     pub arm: Mesh,
     pub leg: Mesh,
     pub rifle: Mesh,
+    pub rig: BotRig,
 }
 
 impl BotModel {
@@ -53,6 +55,7 @@ impl BotModel {
             arm: mesh_sdf(&arm, cell, v(1.0, 1.0, 1.0)),
             leg: mesh_sdf(&leg.union(boot), cell, v(1.0, 1.0, 1.0)),
             rifle,
+            rig: BotRig::build(),
         }
     }
 

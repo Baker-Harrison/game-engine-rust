@@ -9,15 +9,17 @@ pub mod vulkan;
 use crate::camera::Camera;
 use crate::platform::Window;
 use crate::render::Framebuffer;
-use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene, Tri};
+use crate::scene::{AlphaMode, OverlayItem, OverlayRect, OverlayTri, Scene, Tri};
 
 pub const FAR_PLANE: f32 = 500.0;
+pub const SHADOW_SIZE: usize = 2048;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Vertex {
     pub pos: [f32; 4],
     pub normal: [f32; 4],
     pub color: [f32; 4],
+    pub uv: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -34,16 +36,27 @@ pub const KIND_UNLIT: f32 = 1.0;
 pub const KIND_SCREEN: f32 = 2.0;
 pub const MAX_DYNAMIC_VERTICES: usize = 400_000;
 
-fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
+fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri, mode: AlphaMode) {
+    let mode = match mode {
+        AlphaMode::Opaque => 0.0,
+        AlphaMode::Cutout => 1.0,
+        AlphaMode::Blend => 2.0,
+    };
     let kind = if triangle.unlit { KIND_UNLIT } else { KIND_LIT };
     for i in 0..3 {
         let (v, n, c) = (triangle.v[i], triangle.n[i], triangle.c[i]);
-        out.push(Vertex { pos: [v.x, v.y, v.z, 1.0], normal: [n.x, n.y, n.z, kind], color: [c.x, c.y, c.z, 1.0] });
+        let layer = if triangle.unlit { 0.0 } else { triangle.material as f32 };
+        out.push(Vertex {
+            pos: [v.x, v.y, v.z, 1.0],
+            normal: [n.x, n.y, n.z, kind],
+            color: [c.x, c.y, c.z, 1.0],
+            uv: [triangle.t[i][0], triangle.t[i][1], layer, mode],
+        });
     }
 }
 
 fn overlay_vertex(x: f32, y: f32, depth: f32, color: crate::math::Vec3, alpha: f32) -> Vertex {
-    Vertex { pos: [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0], normal: [0.0, 0.0, 1.0, KIND_SCREEN], color: [color.x, color.y, color.z, alpha] }
+    Vertex { pos: [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0], normal: [0.0, 0.0, 1.0, KIND_SCREEN], color: [color.x, color.y, color.z, alpha], uv: [0.0; 4] }
 }
 
 fn push_overlay_rect(out: &mut Vec<Vertex>, rect: &OverlayRect, depth: f32) {
@@ -67,17 +80,26 @@ fn overlay_vertex_count(item: &OverlayItem) -> usize {
 
 pub fn build_vertices(scene: &Scene) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(scene.tris.len() * 3);
-    for triangle in &scene.tris {
-        push_triangle(&mut out, triangle);
+    for blended in [false, true] {
+        for triangle in scene.tris.iter().filter(|t| scene.is_blended(t) == blended) {
+            push_triangle(&mut out, triangle, scene.alpha_mode_of(triangle));
+        }
     }
     out
 }
 
+pub fn static_opaque_vertex_count(scene: &Scene) -> usize {
+    scene.tris.iter().filter(|t| !scene.is_blended(t)).count() * 3
+}
+
 pub fn build_dynamic_vertices(scene: &Scene) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(scene.dynamic.len() * 3 + scene.overlay.len() * 4);
-    for triangle in &scene.dynamic {
-        push_triangle(&mut out, triangle);
+    for blended in [false, true] {
+        for triangle in scene.dynamic.iter().filter(|t| scene.is_blended(t) == blended) {
+            push_triangle(&mut out, triangle, scene.alpha_mode_of(triangle));
+        }
     }
+    let triangle_end = out.len().min(MAX_DYNAMIC_VERTICES);
     let steps = scene.overlay.len().max(1) as f32;
     for (index, item) in scene.overlay.iter().enumerate() {
         if out.len() + overlay_vertex_count(item) > MAX_DYNAMIC_VERTICES {
@@ -89,8 +111,53 @@ pub fn build_dynamic_vertices(scene: &Scene) -> Vec<Vertex> {
             OverlayItem::Tri(tri) => push_overlay_tri(&mut out, tri, depth),
         }
     }
-    out.truncate(MAX_DYNAMIC_VERTICES);
+    out.truncate(MAX_DYNAMIC_VERTICES.max(triangle_end));
     out
+}
+
+pub fn dynamic_opaque_vertex_count(scene: &Scene) -> usize {
+    (scene.dynamic.iter().filter(|t| !scene.is_blended(t)).count() * 3).min(MAX_DYNAMIC_VERTICES)
+}
+
+pub fn dynamic_triangle_vertex_count(scene: &Scene) -> usize {
+    (scene.dynamic.len() * 3).min(MAX_DYNAMIC_VERTICES)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawRange {
+    pub blend_pass: bool,
+    pub dynamic: bool,
+    pub first: usize,
+    pub count: usize,
+}
+
+pub struct DrawCounts {
+    pub static_total: usize,
+    pub static_opaque: usize,
+    pub dynamic_total: usize,
+    pub dynamic_opaque: usize,
+    pub dynamic_triangles: usize,
+}
+
+pub fn draw_counts(scene: &Scene, static_total: usize, dynamic_total: usize) -> DrawCounts {
+    DrawCounts {
+        static_total,
+        static_opaque: static_opaque_vertex_count(scene).min(static_total),
+        dynamic_total,
+        dynamic_opaque: dynamic_opaque_vertex_count(scene).min(dynamic_total),
+        dynamic_triangles: dynamic_triangle_vertex_count(scene).min(dynamic_total),
+    }
+}
+
+pub fn draw_plan(c: &DrawCounts) -> Vec<DrawRange> {
+    let ranges = [
+        DrawRange { blend_pass: false, dynamic: false, first: 0, count: c.static_opaque },
+        DrawRange { blend_pass: false, dynamic: true, first: 0, count: c.dynamic_opaque },
+        DrawRange { blend_pass: true, dynamic: false, first: c.static_opaque, count: c.static_total - c.static_opaque },
+        DrawRange { blend_pass: true, dynamic: true, first: c.dynamic_opaque, count: c.dynamic_triangles - c.dynamic_opaque },
+        DrawRange { blend_pass: false, dynamic: true, first: c.dynamic_triangles, count: c.dynamic_total - c.dynamic_triangles },
+    ];
+    ranges.into_iter().filter(|r| r.count > 0).collect()
 }
 
 pub fn frame_uniforms(scene: &Scene, cam: &Camera, aspect: f32, flip_y: bool) -> FrameUniforms {
@@ -151,4 +218,120 @@ pub fn available() -> &'static str {
     } else {
         "cpu, vulkan"
     }
+}
+
+pub struct MaterialLevel {
+    pub width: usize,
+    pub height: usize,
+    pub albedo: Vec<u8>,
+    pub normal: Vec<u8>,
+    pub packed: Vec<u8>,
+}
+
+pub struct MaterialArrays {
+    pub layers: usize,
+    pub levels: Vec<MaterialLevel>,
+}
+
+fn fit_level(source: &crate::mips::MipTexture, width: usize, height: usize, level: usize) -> Vec<u8> {
+    let texture = &source.levels[level.min(source.levels.len() - 1)];
+    let mut out = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let sx = x * texture.width / width;
+            let sy = y * texture.height / height;
+            out.extend_from_slice(&texture.get(sx, sy));
+        }
+    }
+    out
+}
+
+pub fn pack_materials(scene: &Scene) -> Option<MaterialArrays> {
+    if scene.materials.is_empty() {
+        return None;
+    }
+    let (base_width, base_height) = scene.materials.iter().fold((1, 1), |size, maps| {
+        let (w, h) = maps.albedo.base_size();
+        (size.0.max(w), size.1.max(h))
+    });
+    let level_count = (base_width.max(base_height) as f32).log2().floor() as usize + 1;
+    let mut levels = Vec::with_capacity(level_count);
+    for level in 0..level_count {
+        let (width, height) = ((base_width >> level).max(1), (base_height >> level).max(1));
+        let mut packed_level = MaterialLevel { width, height, albedo: Vec::new(), normal: Vec::new(), packed: Vec::new() };
+        for maps in &scene.materials {
+            let (own_width, _) = maps.albedo.base_size();
+            let source_level = (own_width as f32 / width as f32).max(1.0).log2().floor() as usize;
+            packed_level.albedo.extend(fit_level(&maps.albedo, width, height, source_level));
+            packed_level.normal.extend(fit_level(&maps.normal, width, height, source_level));
+            packed_level.packed.extend(fit_level(&maps.packed, width, height, source_level));
+        }
+        levels.push(packed_level);
+    }
+    Some(MaterialArrays { layers: scene.materials.len(), levels })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShadowUniforms {
+    pub light_view_proj: [f32; 16],
+    pub params: [f32; 4],
+}
+
+pub fn shadow_uniforms(scene: &Scene, flip_y: bool, map_size: usize) -> ShadowUniforms {
+    let mut low = crate::math::Vec3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut high = crate::math::Vec3::new(f32::MIN, f32::MIN, f32::MIN);
+    let mut any = false;
+    for triangle in scene.tris.iter().chain(scene.dynamic.iter()) {
+        if triangle.unlit || scene.is_blended(triangle) {
+            continue;
+        }
+        for v in triangle.v {
+            low = low.min(v);
+            high = high.max(v);
+            any = true;
+        }
+    }
+    if !any {
+        return ShadowUniforms::default();
+    }
+    let sun = crate::render::SUN.normalized();
+    let forward = sun * -1.0;
+    let helper = if forward.y.abs() > 0.95 { crate::math::Vec3::new(1.0, 0.0, 0.0) } else { crate::math::Vec3::new(0.0, 1.0, 0.0) };
+    let right = helper.cross(forward).normalized();
+    let up = forward.cross(right).normalized();
+    let center = (low + high) * 0.5;
+    let (mut min_x, mut max_x, mut min_y, mut max_y, mut min_z, mut max_z) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for corner in 0..8 {
+        let p = crate::math::Vec3::new(
+            if corner & 1 == 0 { low.x } else { high.x },
+            if corner & 2 == 0 { low.y } else { high.y },
+            if corner & 4 == 0 { low.z } else { high.z },
+        ) - center;
+        let (x, y, z) = (p.dot(right), p.dot(up), p.dot(forward));
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+        min_z = min_z.min(z);
+        max_z = max_z.max(z);
+    }
+    let margin = 1.0;
+    let (min_x, max_x, min_y, max_y, min_z, max_z) = (min_x - margin, max_x + margin, min_y - margin, max_y + margin, min_z - margin, max_z + margin);
+    let (sx, sy, sz) = (2.0 / (max_x - min_x), 2.0 / (max_y - min_y), 1.0 / (max_z - min_z));
+    let flip = if flip_y { -1.0 } else { 1.0 };
+    let rows = [
+        [right.x * sx, right.y * sx, right.z * sx, -(right.dot(center) + min_x) * sx - 1.0],
+        [up.x * sy * flip, up.y * sy * flip, up.z * sy * flip, (-(up.dot(center) + min_y) * sy - 1.0) * flip],
+        [forward.x * sz, forward.y * sz, forward.z * sz, -(forward.dot(center) + min_z) * sz],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let mut m = [0.0f32; 16];
+    for c in 0..4 {
+        for r in 0..4 {
+            m[c * 4 + r] = rows[r][c];
+        }
+    }
+    let texel = ((max_x - min_x) / map_size as f32).max((max_y - min_y) / map_size as f32);
+    ShadowUniforms { light_view_proj: m, params: [1.0, texel, 0.0, 0.0] }
 }

@@ -1,7 +1,7 @@
 
 #![allow(non_snake_case, non_camel_case_types, clippy::too_many_arguments)]
 
-use super::{build_dynamic_vertices, build_vertices, frame_uniforms, FrameUniforms, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
+use super::{build_dynamic_vertices, build_vertices, draw_counts, draw_plan, frame_uniforms, pack_materials, shadow_uniforms, DrawRange, ShadowUniforms, SHADOW_SIZE, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
 use crate::camera::Camera;
 use crate::platform::{NativeHandle, Window};
 use crate::render::Framebuffer;
@@ -66,6 +66,16 @@ type Gipa = unsafe extern "system" fn(Ptr, *const c_char) -> *mut c_void;
 #[repr(C)] struct PresentInfo { s_type: u32, p_next: *const c_void, wait_count: u32, waits: *const Handle, sc_count: u32, scs: *const Handle, indices: *const u32, results: *mut i32 }
 #[repr(C)] #[derive(Default)] struct SurfaceCaps { min_images: u32, max_images: u32, current: [u32; 2], min_extent: [u32; 2], max_extent: [u32; 2], max_layers: u32, transforms: u32, current_transform: u32, alpha: u32, usage: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)] struct SurfaceFormat { format: u32, color_space: u32 }
+#[repr(C)] struct SamplerCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, mag: u32, min: u32, mip_mode: u32, addr_u: u32, addr_v: u32, addr_w: u32, lod_bias: f32, aniso: u32, max_aniso: f32, compare: u32, compare_op: u32, min_lod: f32, max_lod: f32, border: u32, unnormalized: u32 }
+#[repr(C)] struct DescriptorBinding { binding: u32, kind: u32, count: u32, stages: u32, immutable: *const Handle }
+#[repr(C)] struct DescriptorLayoutCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, count: u32, bindings: *const DescriptorBinding }
+#[repr(C)] struct DescriptorPoolSize { kind: u32, count: u32 }
+#[repr(C)] struct DescriptorPoolCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, max_sets: u32, size_count: u32, sizes: *const DescriptorPoolSize }
+#[repr(C)] struct DescriptorSetAllocateInfo { s_type: u32, p_next: *const c_void, pool: Handle, count: u32, layouts: *const Handle }
+#[repr(C)] struct DescriptorImageInfo { sampler: Handle, view: Handle, layout: u32 }
+#[repr(C)] struct DescriptorBufferInfo { buffer: Handle, offset: u64, range: u64 }
+#[repr(C)] struct WriteDescriptorSet { s_type: u32, p_next: *const c_void, set: Handle, binding: u32, element: u32, count: u32, kind: u32, image: *const DescriptorImageInfo, buffer: *const c_void, texel: *const c_void }
+#[repr(C)] struct ImageMemoryBarrier { s_type: u32, p_next: *const c_void, src_access: u32, dst_access: u32, old_layout: u32, new_layout: u32, src_family: u32, dst_family: u32, image: Handle, range: SubresourceRange }
 #[repr(C)] struct XlibSurfaceCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, dpy: *mut c_void, window: std::ffi::c_ulong }
 #[repr(C)] struct Win32SurfaceCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, hinstance: *mut c_void, hwnd: *mut c_void }
 
@@ -126,6 +136,18 @@ vk_table!(Fns {
     CreateFence(Ptr, *const SimpleCreateInfo, *const c_void, *mut Handle) -> VkResult;
     WaitForFences(Ptr, u32, *const Handle, u32, u64) -> VkResult;
     ResetFences(Ptr, u32, *const Handle) -> VkResult;
+    CreateSampler(Ptr, *const SamplerCreateInfo, *const c_void, *mut Handle) -> VkResult;
+    CreateDescriptorSetLayout(Ptr, *const DescriptorLayoutCreateInfo, *const c_void, *mut Handle) -> VkResult;
+    CreateDescriptorPool(Ptr, *const DescriptorPoolCreateInfo, *const c_void, *mut Handle) -> VkResult;
+    AllocateDescriptorSets(Ptr, *const DescriptorSetAllocateInfo, *mut Handle) -> VkResult;
+    UpdateDescriptorSets(Ptr, u32, *const WriteDescriptorSet, u32, *const c_void) -> ();
+    CmdBindDescriptorSets(Ptr, u32, Handle, u32, u32, *const Handle, u32, *const u32) -> ();
+    CmdPipelineBarrier(Ptr, u32, u32, u32, u32, *const c_void, u32, *const c_void, u32, *const ImageMemoryBarrier) -> ();
+    CmdCopyBufferToImage(Ptr, Handle, Handle, u32, u32, *const BufferImageCopy) -> ();
+    DestroyImage(Ptr, Handle, *const c_void) -> ();
+    DestroyImageView(Ptr, Handle, *const c_void) -> ();
+    FreeMemory(Ptr, Handle, *const c_void) -> ();
+    DestroyBuffer(Ptr, Handle, *const c_void) -> ();
 });
 
 vk_table!(SwapFns {
@@ -142,6 +164,7 @@ vk_table!(SwapFns {
 const FORMAT_BGRA8: u32 = 44;
 const FORMAT_D32: u32 = 126;
 const FORMAT_RGBA32F: u32 = 109;
+const FORMAT_RGBA8: u32 = 37;
 const LAYOUT_COLOR: u32 = 2;
 const LAYOUT_DEPTH: u32 = 3;
 const LAYOUT_TRANSFER_SRC: u32 = 6;
@@ -149,6 +172,7 @@ const LAYOUT_PRESENT: u32 = 1000001002;
 const EXTERNAL: u32 = 0xFFFF_FFFF;
 const SPV_VERT: &[u8] = include_bytes!("../../shaders/scene.vert.spv");
 const SPV_FRAG: &[u8] = include_bytes!("../../shaders/scene.frag.spv");
+const SPV_SHADOW: &[u8] = include_bytes!("../../shaders/shadow.vert.spv");
 
 macro_rules! chk {
     ($e:expr, $what:expr) => {{
@@ -174,6 +198,16 @@ pub struct VulkanRenderer {
     render_pass: Handle,
     layout: Handle,
     pipeline: Handle,
+    blend_pipeline: Handle,
+    shadow_pass: Handle,
+    shadow_framebuffer: Handle,
+    shadow_pipeline: Handle,
+    shadow_layout: Handle,
+    shadow_sampler: Handle,
+    shadow_buffer_mapped: *mut u8,
+    shadow_draws: Vec<DrawRange>,
+    static_opaque: usize,
+    draws: Vec<DrawRange>,
     cmd: Ptr,
     fence: Handle,
     sem_acquire: Handle,
@@ -184,6 +218,10 @@ pub struct VulkanRenderer {
     vertex_count: u32,
     dynamic_count: u32,
     vertex_mapped: *mut u8,
+    sampler: Handle,
+    set_layout: Handle,
+    descriptor_set: Handle,
+    material_images: Vec<(Handle, Handle, Handle)>,
     target: Target,
     w: usize,
     h: usize,
@@ -320,8 +358,9 @@ impl VulkanRenderer {
             (f.GetDeviceQueue)(device, family, 0, &mut queue);
 
             let mut r = VulkanRenderer {
-                f, sf, instance, device, queue, mem, render_pass: 0, layout: 0, pipeline: 0, cmd: std::ptr::null_mut(),
+                f, sf, instance, device, queue, mem, render_pass: 0, layout: 0, pipeline: 0, blend_pipeline: 0, shadow_pass: 0, shadow_framebuffer: 0, shadow_pipeline: 0, shadow_layout: 0, shadow_sampler: 0, shadow_buffer_mapped: std::ptr::null_mut(), shadow_draws: Vec::new(), static_opaque: 0, draws: Vec::new(), cmd: std::ptr::null_mut(),
                 fence: 0, sem_acquire: 0, sem_render: 0, vertex_buf: 0, vertex_mem: 0, vertex_capacity: 0, vertex_count: 0, dynamic_count: 0, vertex_mapped: std::ptr::null_mut(),
+                sampler: 0, set_layout: 0, descriptor_set: 0, material_images: Vec::new(),
                 target: Target::Offscreen { image: 0, framebuffer: 0, readback: 0, readback_mem: 0 }, w, h, device_name,
             };
             r.init(phys, surface, family)?;
@@ -469,8 +508,9 @@ impl VulkanRenderer {
             VertexAttr { location: 0, binding: 0, format: FORMAT_RGBA32F, offset: 0 },
             VertexAttr { location: 1, binding: 0, format: FORMAT_RGBA32F, offset: 16 },
             VertexAttr { location: 2, binding: 0, format: FORMAT_RGBA32F, offset: 32 },
+            VertexAttr { location: 3, binding: 0, format: FORMAT_RGBA32F, offset: 48 },
         ];
-        let vi = VertexInputState { s_type: 19, p_next: std::ptr::null(), flags: 0, bind_count: 1, binds: &binding, attr_count: 3, attrs: attrs.as_ptr() };
+        let vi = VertexInputState { s_type: 19, p_next: std::ptr::null(), flags: 0, bind_count: 1, binds: &binding, attr_count: 4, attrs: attrs.as_ptr() };
         let ia = InputAssemblyState { s_type: 20, p_next: std::ptr::null(), flags: 0, topology: 3, restart: 0 };
         let vp = Viewport { x: 0.0, y: 0.0, w: self.w as f32, h: self.h as f32, min_depth: 0.0, max_depth: 1.0 };
         let sc = Rect2D { x: 0, y: 0, w: self.w as u32, h: self.h as u32 };
@@ -482,7 +522,18 @@ impl VulkanRenderer {
         let ba = BlendAttachment { enable: 1, sc: 6, dc: 7, co: 0, sa: 1, da: 7, ao: 0, mask: 0xF };
         let bs = BlendState { s_type: 26, p_next: std::ptr::null(), flags: 0, logic_en: 0, logic: 0, att_count: 1, atts: &ba, consts: [0.0; 4] };
         let pc = PushRange { stages: 0x11, offset: 0, size: std::mem::size_of::<FrameUniforms>() as u32 };
-        let li = PipelineLayoutCreateInfo { s_type: 30, p_next: std::ptr::null(), flags: 0, set_count: 0, sets: std::ptr::null(), pc_count: 1, pcs: &pc };
+        let sampler_info = SamplerCreateInfo { s_type: 31, p_next: std::ptr::null(), flags: 0, mag: 1, min: 1, mip_mode: 1, addr_u: 0, addr_v: 0, addr_w: 0, lod_bias: 0.0, aniso: 0, max_aniso: 1.0, compare: 0, compare_op: 0, min_lod: 0.0, max_lod: 16.0, border: 0, unnormalized: 0 };
+        chk!((self.f.CreateSampler)(self.device, &sampler_info, std::ptr::null(), &mut self.sampler), "vkCreateSampler");
+        let bindings: Vec<DescriptorBinding> = (0..5).map(|binding| DescriptorBinding { binding, kind: if binding == 4 { 6 } else { 1 }, count: 1, stages: 0x10, immutable: std::ptr::null() }).collect();
+        let dli = DescriptorLayoutCreateInfo { s_type: 32, p_next: std::ptr::null(), flags: 0, count: 5, bindings: bindings.as_ptr() };
+        chk!((self.f.CreateDescriptorSetLayout)(self.device, &dli, std::ptr::null(), &mut self.set_layout), "vkCreateDescriptorSetLayout");
+        let pool_sizes = [DescriptorPoolSize { kind: 1, count: 4 }, DescriptorPoolSize { kind: 6, count: 1 }];
+        let dpi = DescriptorPoolCreateInfo { s_type: 33, p_next: std::ptr::null(), flags: 0, max_sets: 1, size_count: 2, sizes: pool_sizes.as_ptr() };
+        let mut descriptor_pool = 0;
+        chk!((self.f.CreateDescriptorPool)(self.device, &dpi, std::ptr::null(), &mut descriptor_pool), "vkCreateDescriptorPool");
+        let dai = DescriptorSetAllocateInfo { s_type: 34, p_next: std::ptr::null(), pool: descriptor_pool, count: 1, layouts: &self.set_layout };
+        chk!((self.f.AllocateDescriptorSets)(self.device, &dai, &mut self.descriptor_set), "vkAllocateDescriptorSets");
+        let li = PipelineLayoutCreateInfo { s_type: 30, p_next: std::ptr::null(), flags: 0, set_count: 1, sets: &self.set_layout, pc_count: 1, pcs: &pc };
         chk!((self.f.CreatePipelineLayout)(self.device, &li, std::ptr::null(), &mut self.layout), "vkCreatePipelineLayout");
         let gpi = GraphicsPipelineCreateInfo {
             s_type: 28, p_next: std::ptr::null(), flags: 0, stage_count: 2, stages: stages.as_ptr(), vertex: &vi, assembly: &ia,
@@ -490,6 +541,16 @@ impl VulkanRenderer {
             layout: self.layout, render_pass: self.render_pass, subpass: 0, base: 0, base_index: -1,
         };
         chk!((self.f.CreateGraphicsPipelines)(self.device, 0, 1, &gpi, std::ptr::null(), &mut self.pipeline), "vkCreateGraphicsPipelines");
+        let ds_blend = DepthStencilState { s_type: 25, p_next: std::ptr::null(), flags: 0, test: 1, write: 0, compare: 1, bounds: 0, stencil: 0,
+            front: StencilOp::default(), back: StencilOp::default(), min_depth: 0.0, max_depth: 1.0 };
+        let gpi_blend = GraphicsPipelineCreateInfo {
+            s_type: 28, p_next: std::ptr::null(), flags: 0, stage_count: 2, stages: stages.as_ptr(), vertex: &vi, assembly: &ia,
+            tess: std::ptr::null(), viewport: &vps, raster: &rs, ms: &ms, ds: &ds_blend, blend: &bs, dynamic: std::ptr::null(),
+            layout: self.layout, render_pass: self.render_pass, subpass: 0, base: 0, base_index: -1,
+        };
+        chk!((self.f.CreateGraphicsPipelines)(self.device, 0, 1, &gpi_blend, std::ptr::null(), &mut self.blend_pipeline), "vkCreateGraphicsPipelines");
+
+        self.init_shadow()?;
 
         let pi = CommandPoolCreateInfo { s_type: 39, p_next: std::ptr::null(), flags: 2, family };
         let mut pool = 0;
@@ -501,26 +562,216 @@ impl VulkanRenderer {
         let si = SimpleCreateInfo { s_type: 9, p_next: std::ptr::null(), flags: 0 };
         chk!((self.f.CreateSemaphore)(self.device, &si, std::ptr::null(), &mut self.sem_acquire), "vkCreateSemaphore");
         chk!((self.f.CreateSemaphore)(self.device, &si, std::ptr::null(), &mut self.sem_render), "vkCreateSemaphore");
+        self.upload_materials(None)?;
         Ok(())
     }
 
-    unsafe fn record(&self, framebuffer: Handle, u: &FrameUniforms, readback: Option<(Handle, Handle)>) -> Result<(), String> {
+    unsafe fn init_shadow(&mut self) -> Result<(), String> {
+        let size = SHADOW_SIZE as u32;
+        let ci = ImageCreateInfo {
+            s_type: 14, p_next: std::ptr::null(), flags: 0, image_type: 1, format: FORMAT_D32, extent: [size, size, 1],
+            mips: 1, layers: 1, samples: 1, tiling: 0, usage: 0x20 | 0x04, sharing: 0, qfi_count: 0, qfi: std::ptr::null(), initial_layout: 0,
+        };
+        let mut image = 0;
+        chk!((self.f.CreateImage)(self.device, &ci, std::ptr::null(), &mut image), "vkCreateImage");
+        let mut req = MemoryRequirements::default();
+        (self.f.GetImageMemoryRequirements)(self.device, image, &mut req);
+        let ai = MemoryAllocateInfo { s_type: 5, p_next: std::ptr::null(), size: req.size, type_index: self.memory_type(req.type_bits, 1)? };
+        let mut memory = 0;
+        chk!((self.f.AllocateMemory)(self.device, &ai, std::ptr::null(), &mut memory), "vkAllocateMemory");
+        chk!((self.f.BindImageMemory)(self.device, image, memory, 0), "vkBindImageMemory");
+        let view = self.make_view(image, FORMAT_D32, 2)?;
+
+        let attachment = AttachmentDescription { flags: 0, format: FORMAT_D32, samples: 1, load: 1, store: 0, sload: 2, sstore: 1, initial: 0, final_: 4 };
+        let depth_ref = AttachmentReference { attachment: 0, layout: LAYOUT_DEPTH };
+        let sub = SubpassDescription {
+            flags: 0, bind_point: 0, input_count: 0, input: std::ptr::null(), color_count: 0, color: std::ptr::null(), resolve: std::ptr::null(),
+            depth: &depth_ref, preserve_count: 0, preserve: std::ptr::null(),
+        };
+        let deps = [
+            SubpassDependency { src: EXTERNAL, dst: 0, src_stage: 0x80, dst_stage: 0x100 | 0x200, src_access: 0x20, dst_access: 0x400, flags: 0 },
+            SubpassDependency { src: 0, dst: EXTERNAL, src_stage: 0x200, dst_stage: 0x80, src_access: 0x400, dst_access: 0x20, flags: 0 },
+        ];
+        let rpi = RenderPassCreateInfo { s_type: 38, p_next: std::ptr::null(), flags: 0, att_count: 1, atts: &attachment, sub_count: 1, subs: &sub, dep_count: 2, deps: deps.as_ptr() };
+        chk!((self.f.CreateRenderPass)(self.device, &rpi, std::ptr::null(), &mut self.shadow_pass), "vkCreateRenderPass");
+        let fi = FramebufferCreateInfo { s_type: 37, p_next: std::ptr::null(), flags: 0, render_pass: self.shadow_pass, att_count: 1, atts: &view, width: size, height: size, layers: 1 };
+        chk!((self.f.CreateFramebuffer)(self.device, &fi, std::ptr::null(), &mut self.shadow_framebuffer), "vkCreateFramebuffer");
+
+        let vs = self.shader(SPV_SHADOW)?;
+        let stage = StageInfo { s_type: 18, p_next: std::ptr::null(), flags: 0, stage: 1, module: vs, name: b"main\0".as_ptr() as *const c_char, spec: std::ptr::null() };
+        let binding = VertexBinding { binding: 0, stride: std::mem::size_of::<Vertex>() as u32, rate: 0 };
+        let attr = VertexAttr { location: 0, binding: 0, format: FORMAT_RGBA32F, offset: 0 };
+        let vi = VertexInputState { s_type: 19, p_next: std::ptr::null(), flags: 0, bind_count: 1, binds: &binding, attr_count: 1, attrs: &attr };
+        let ia = InputAssemblyState { s_type: 20, p_next: std::ptr::null(), flags: 0, topology: 3, restart: 0 };
+        let vp = Viewport { x: 0.0, y: 0.0, w: size as f32, h: size as f32, min_depth: 0.0, max_depth: 1.0 };
+        let sc = Rect2D { x: 0, y: 0, w: size, h: size };
+        let vps = ViewportState { s_type: 22, p_next: std::ptr::null(), flags: 0, vp_count: 1, vps: &vp, sc_count: 1, scs: &sc };
+        let rs = RasterState { s_type: 23, p_next: std::ptr::null(), flags: 0, clamp: 0, discard: 0, polygon: 0, cull: 0, front: 0, bias: 0, bias_c: 0.0, bias_clamp: 0.0, bias_slope: 0.0, line_width: 1.0 };
+        let ms = MultisampleState { s_type: 24, p_next: std::ptr::null(), flags: 0, samples: 1, sample_shading: 0, min_sample: 0.0, mask: std::ptr::null(), a2c: 0, a21: 0 };
+        let ds = DepthStencilState { s_type: 25, p_next: std::ptr::null(), flags: 0, test: 1, write: 1, compare: 1, bounds: 0, stencil: 0,
+            front: StencilOp::default(), back: StencilOp::default(), min_depth: 0.0, max_depth: 1.0 };
+        let bs = BlendState { s_type: 26, p_next: std::ptr::null(), flags: 0, logic_en: 0, logic: 0, att_count: 0, atts: std::ptr::null(), consts: [0.0; 4] };
+        let pc = PushRange { stages: 1, offset: 0, size: 64 };
+        let li = PipelineLayoutCreateInfo { s_type: 30, p_next: std::ptr::null(), flags: 0, set_count: 0, sets: std::ptr::null(), pc_count: 1, pcs: &pc };
+        chk!((self.f.CreatePipelineLayout)(self.device, &li, std::ptr::null(), &mut self.shadow_layout), "vkCreatePipelineLayout");
+        let gpi = GraphicsPipelineCreateInfo {
+            s_type: 28, p_next: std::ptr::null(), flags: 0, stage_count: 1, stages: &stage, vertex: &vi, assembly: &ia,
+            tess: std::ptr::null(), viewport: &vps, raster: &rs, ms: &ms, ds: &ds, blend: &bs, dynamic: std::ptr::null(),
+            layout: self.shadow_layout, render_pass: self.shadow_pass, subpass: 0, base: 0, base_index: -1,
+        };
+        chk!((self.f.CreateGraphicsPipelines)(self.device, 0, 1, &gpi, std::ptr::null(), &mut self.shadow_pipeline), "vkCreateGraphicsPipelines");
+
+        let sampler_info = SamplerCreateInfo { s_type: 31, p_next: std::ptr::null(), flags: 0, mag: 1, min: 1, mip_mode: 0, addr_u: 3, addr_v: 3, addr_w: 3, lod_bias: 0.0, aniso: 0, max_aniso: 1.0, compare: 1, compare_op: 3, min_lod: 0.0, max_lod: 0.0, border: 3, unnormalized: 0 };
+        chk!((self.f.CreateSampler)(self.device, &sampler_info, std::ptr::null(), &mut self.shadow_sampler), "vkCreateSampler");
+        let (uniform_buffer, uniform_memory) = self.alloc_buffer(256, 0x10)?;
+        let mut mapped: *mut c_void = std::ptr::null_mut();
+        chk!((self.f.MapMemory)(self.device, uniform_memory, 0, 256, 0, &mut mapped), "vkMapMemory");
+        self.shadow_buffer_mapped = mapped as *mut u8;
+
+        let image_info = DescriptorImageInfo { sampler: self.shadow_sampler, view, layout: 4 };
+        let buffer_info = DescriptorBufferInfo { buffer: uniform_buffer, offset: 0, range: std::mem::size_of::<ShadowUniforms>() as u64 };
+        let writes = [
+            WriteDescriptorSet { s_type: 35, p_next: std::ptr::null(), set: self.descriptor_set, binding: 3, element: 0, count: 1, kind: 1, image: &image_info, buffer: std::ptr::null(), texel: std::ptr::null() },
+            WriteDescriptorSet { s_type: 35, p_next: std::ptr::null(), set: self.descriptor_set, binding: 4, element: 0, count: 1, kind: 6, image: std::ptr::null(), buffer: &buffer_info as *const DescriptorBufferInfo as *const c_void, texel: std::ptr::null() },
+        ];
+        (self.f.UpdateDescriptorSets)(self.device, 2, writes.as_ptr(), 0, std::ptr::null());
+        Ok(())
+    }
+
+    unsafe fn upload_materials(&mut self, arrays: Option<&MaterialArrays>) -> Result<(), String> {
+        let fallback = MaterialArrays {
+            layers: 1,
+            levels: vec![MaterialLevel { width: 1, height: 1, albedo: vec![255; 4], normal: vec![128, 128, 255, 255], packed: vec![220, 0, 255, 255] }],
+        };
+        let arrays = arrays.unwrap_or(&fallback);
+        chk!((self.f.DeviceWaitIdle)(self.device), "vkDeviceWaitIdle");
+        for (image, memory, view) in self.material_images.drain(..) {
+            (self.f.DestroyImageView)(self.device, view, std::ptr::null());
+            (self.f.DestroyImage)(self.device, image, std::ptr::null());
+            (self.f.FreeMemory)(self.device, memory, std::ptr::null());
+        }
+        let kinds: [fn(&MaterialLevel) -> &Vec<u8>; 3] = [|l| &l.albedo, |l| &l.normal, |l| &l.packed];
+        let total: usize = arrays.levels.iter().map(|l| l.albedo.len() * 3).sum();
+        let (staging, staging_memory) = self.alloc_buffer(total as u64, 1)?;
+        let mut mapped: *mut c_void = std::ptr::null_mut();
+        chk!((self.f.MapMemory)(self.device, staging_memory, 0, total as u64, 0, &mut mapped), "vkMapMemory");
+        let mut regions: Vec<Vec<BufferImageCopy>> = Vec::new();
+        let mut cursor = 0usize;
+        for kind in kinds.iter() {
+            let mut list = Vec::new();
+            for (level_index, level) in arrays.levels.iter().enumerate() {
+                let data = kind(level);
+                std::ptr::copy_nonoverlapping(data.as_ptr(), (mapped as *mut u8).add(cursor), data.len());
+                list.push(BufferImageCopy {
+                    buffer_offset: cursor as u64, row_length: 0, image_height: 0,
+                    sub: SubresourceLayers { aspect: 1, mip: level_index as u32, base_layer: 0, layers: arrays.layers as u32 },
+                    offset: [0, 0, 0], extent: [level.width as u32, level.height as u32, 1],
+                });
+                cursor += data.len();
+            }
+            regions.push(list);
+        }
+        (self.f.UnmapMemory)(self.device, staging_memory);
+
+        let mip_count = arrays.levels.len() as u32;
+        let base = &arrays.levels[0];
+        let mut created = Vec::new();
+        for _ in 0..3 {
+            let ci = ImageCreateInfo {
+                s_type: 14, p_next: std::ptr::null(), flags: 0, image_type: 1, format: FORMAT_RGBA8, extent: [base.width as u32, base.height as u32, 1],
+                mips: mip_count, layers: arrays.layers as u32, samples: 1, tiling: 0, usage: 0x6, sharing: 0, qfi_count: 0, qfi: std::ptr::null(), initial_layout: 0,
+            };
+            let mut image = 0;
+            chk!((self.f.CreateImage)(self.device, &ci, std::ptr::null(), &mut image), "vkCreateImage");
+            let mut req = MemoryRequirements::default();
+            (self.f.GetImageMemoryRequirements)(self.device, image, &mut req);
+            let ai = MemoryAllocateInfo { s_type: 5, p_next: std::ptr::null(), size: req.size, type_index: self.memory_type(req.type_bits, 1)? };
+            let mut memory = 0;
+            chk!((self.f.AllocateMemory)(self.device, &ai, std::ptr::null(), &mut memory), "vkAllocateMemory");
+            chk!((self.f.BindImageMemory)(self.device, image, memory, 0), "vkBindImageMemory");
+            let range = SubresourceRange { aspect: 1, base_mip: 0, mips: mip_count, base_layer: 0, layers: arrays.layers as u32 };
+            let vi = ImageViewCreateInfo { s_type: 15, p_next: std::ptr::null(), flags: 0, image, view_type: 5, format: FORMAT_RGBA8, components: [0; 4], range };
+            let mut view = 0;
+            chk!((self.f.CreateImageView)(self.device, &vi, std::ptr::null(), &mut view), "vkCreateImageView");
+            created.push((image, memory, view));
+        }
+
+        chk!((self.f.ResetCommandBuffer)(self.cmd, 0), "vkResetCommandBuffer");
+        let bi = CommandBufferBeginInfo { s_type: 42, p_next: std::ptr::null(), flags: 1, inheritance: std::ptr::null() };
+        chk!((self.f.BeginCommandBuffer)(self.cmd, &bi), "vkBeginCommandBuffer");
+        let barrier = |image: Handle, src_access: u32, dst_access: u32, old: u32, new: u32| ImageMemoryBarrier {
+            s_type: 45, p_next: std::ptr::null(), src_access, dst_access, old_layout: old, new_layout: new, src_family: EXTERNAL, dst_family: EXTERNAL, image,
+            range: SubresourceRange { aspect: 1, base_mip: 0, mips: mip_count, base_layer: 0, layers: arrays.layers as u32 },
+        };
+        for (index, (image, _, _)) in created.iter().enumerate() {
+            let to_dst = barrier(*image, 0, 0x1000, 0, 7);
+            (self.f.CmdPipelineBarrier)(self.cmd, 0x1, 0x1000, 0, 0, std::ptr::null(), 0, std::ptr::null(), 1, &to_dst);
+            (self.f.CmdCopyBufferToImage)(self.cmd, staging, *image, 7, regions[index].len() as u32, regions[index].as_ptr());
+            let to_read = barrier(*image, 0x1000, 0x20, 7, 5);
+            (self.f.CmdPipelineBarrier)(self.cmd, 0x1000, 0x80, 0, 0, std::ptr::null(), 0, std::ptr::null(), 1, &to_read);
+        }
+        chk!((self.f.EndCommandBuffer)(self.cmd), "vkEndCommandBuffer");
+        let si = SubmitInfo { s_type: 4, p_next: std::ptr::null(), wait_count: 0, waits: std::ptr::null(), stages: std::ptr::null(), cmd_count: 1, cmds: &self.cmd, signal_count: 0, signals: std::ptr::null() };
+        chk!((self.f.QueueSubmit)(self.queue, 1, &si, 0), "vkQueueSubmit");
+        chk!((self.f.QueueWaitIdle)(self.queue), "vkQueueWaitIdle");
+        (self.f.DestroyBuffer)(self.device, staging, std::ptr::null());
+        (self.f.FreeMemory)(self.device, staging_memory, std::ptr::null());
+
+        let infos: Vec<DescriptorImageInfo> = created.iter().map(|(_, _, view)| DescriptorImageInfo { sampler: self.sampler, view: *view, layout: 5 }).collect();
+        let writes: Vec<WriteDescriptorSet> = (0..3).map(|binding| WriteDescriptorSet {
+            s_type: 35, p_next: std::ptr::null(), set: self.descriptor_set, binding: binding as u32, element: 0, count: 1, kind: 1,
+            image: &infos[binding], buffer: std::ptr::null(), texel: std::ptr::null(),
+        }).collect();
+        (self.f.UpdateDescriptorSets)(self.device, 3, writes.as_ptr(), 0, std::ptr::null());
+        self.material_images = created;
+        Ok(())
+    }
+
+    unsafe fn record(&self, scene: &Scene, framebuffer: Handle, u: &FrameUniforms, readback: Option<(Handle, Handle)>) -> Result<(), String> {
         let f = &self.f;
         chk!((f.ResetCommandBuffer)(self.cmd, 0), "vkResetCommandBuffer");
         let bi = CommandBufferBeginInfo { s_type: 42, p_next: std::ptr::null(), flags: 1, inheritance: std::ptr::null() };
         chk!((f.BeginCommandBuffer)(self.cmd, &bi), "vkBeginCommandBuffer");
+        let shadow = shadow_uniforms(scene, true, SHADOW_SIZE);
+        std::ptr::copy_nonoverlapping(&shadow as *const ShadowUniforms as *const u8, self.shadow_buffer_mapped, std::mem::size_of::<ShadowUniforms>());
+        let shadow_clear = [[1.0f32, 0.0, 0.0, 0.0]];
+        let sb = RenderPassBeginInfo {
+            s_type: 43, p_next: std::ptr::null(), render_pass: self.shadow_pass, framebuffer: self.shadow_framebuffer,
+            area: Rect2D { x: 0, y: 0, w: SHADOW_SIZE as u32, h: SHADOW_SIZE as u32 }, clear_count: 1, clears: shadow_clear.as_ptr(),
+        };
+        (f.CmdBeginRenderPass)(self.cmd, &sb, 0);
+        if shadow.params[0] > 0.5 && !self.shadow_draws.is_empty() {
+            (f.CmdBindPipeline)(self.cmd, 0, self.shadow_pipeline);
+            let off = 0u64;
+            (f.CmdBindVertexBuffers)(self.cmd, 0, 1, &self.vertex_buf, &off);
+            (f.CmdPushConstants)(self.cmd, self.shadow_layout, 1, 0, 64, shadow.light_view_proj.as_ptr() as *const c_void);
+            for range in &self.shadow_draws {
+                let first = if range.dynamic { self.vertex_count as usize + range.first } else { range.first };
+                (f.CmdDraw)(self.cmd, range.count as u32, 1, first as u32, 0);
+            }
+        }
+        (f.CmdEndRenderPass)(self.cmd);
         let clears = [[u.sky[0], u.sky[1], u.sky[2], 1.0], [1.0, 0.0, 0.0, 0.0]];
         let rb = RenderPassBeginInfo {
             s_type: 43, p_next: std::ptr::null(), render_pass: self.render_pass, framebuffer,
             area: Rect2D { x: 0, y: 0, w: self.w as u32, h: self.h as u32 }, clear_count: 2, clears: clears.as_ptr(),
         };
         (f.CmdBeginRenderPass)(self.cmd, &rb, 0);
-        if self.vertex_count + self.dynamic_count > 0 {
-            (f.CmdBindPipeline)(self.cmd, 0, self.pipeline);
+        if !self.draws.is_empty() {
+            (f.CmdBindDescriptorSets)(self.cmd, 0, self.layout, 0, 1, &self.descriptor_set, 0, std::ptr::null());
             let off = 0u64;
             (f.CmdBindVertexBuffers)(self.cmd, 0, 1, &self.vertex_buf, &off);
             (f.CmdPushConstants)(self.cmd, self.layout, 0x11, 0, std::mem::size_of::<FrameUniforms>() as u32, u as *const FrameUniforms as *const c_void);
-            (f.CmdDraw)(self.cmd, self.vertex_count + self.dynamic_count, 1, 0, 0);
+            let mut bound = 0;
+            for range in &self.draws {
+                let wanted = if range.blend_pass { self.blend_pipeline } else { self.pipeline };
+                if wanted != bound {
+                    (f.CmdBindPipeline)(self.cmd, 0, wanted);
+                    bound = wanted;
+                }
+                let first = if range.dynamic { self.vertex_count as usize + range.first } else { range.first };
+                (f.CmdDraw)(self.cmd, range.count as u32, 1, first as u32, 0);
+            }
         }
         (f.CmdEndRenderPass)(self.cmd);
         if let (Some((image, buffer)), true) = (readback, true) {
@@ -544,8 +795,11 @@ impl Renderer for VulkanRenderer {
         let verts = build_vertices(scene);
         let vertex_size = std::mem::size_of::<Vertex>();
         unsafe {
+            let arrays = pack_materials(scene);
+            self.upload_materials(arrays.as_ref())?;
             chk!((self.f.DeviceWaitIdle)(self.device), "vkDeviceWaitIdle");
             self.vertex_count = verts.len() as u32;
+            self.static_opaque = super::static_opaque_vertex_count(scene).min(verts.len());
             let bytes = ((verts.len() + MAX_DYNAMIC_VERTICES) * vertex_size) as u64;
             if bytes > self.vertex_capacity {
                 let (buf, mem) = self.alloc_buffer(bytes, 0x80)?;
@@ -577,7 +831,7 @@ impl Renderer for VulkanRenderer {
                 return Err(format!("Vulkan: vkAcquireNextImageKHR failed (VkResult {})", r));
             }
             chk!((self.f.ResetFences)(self.device, 1, &self.fence), "vkResetFences");
-            self.record(framebuffers[index as usize], &u, None)?;
+            self.record(scene, framebuffers[index as usize], &u, None)?;
             let stage = 0x400u32;
             let si = SubmitInfo { s_type: 4, p_next: std::ptr::null(), wait_count: 1, waits: &self.sem_acquire, stages: &stage, cmd_count: 1,
                 cmds: &self.cmd, signal_count: 1, signals: &self.sem_render };
@@ -602,7 +856,7 @@ impl Renderer for VulkanRenderer {
             chk!((self.f.WaitForFences)(self.device, 1, &self.fence, 1, u64::MAX), "vkWaitForFences");
             self.write_dynamic(scene);
             chk!((self.f.ResetFences)(self.device, 1, &self.fence), "vkResetFences");
-            self.record(framebuffer, &u, Some((image, readback)))?;
+            self.record(scene, framebuffer, &u, Some((image, readback)))?;
             let si = SubmitInfo { s_type: 4, p_next: std::ptr::null(), wait_count: 0, waits: std::ptr::null(), stages: std::ptr::null(), cmd_count: 1,
                 cmds: &self.cmd, signal_count: 0, signals: std::ptr::null() };
             chk!((self.f.QueueSubmit)(self.queue, 1, &si, self.fence), "vkQueueSubmit");
@@ -627,9 +881,20 @@ impl VulkanRenderer {
         let vertex_size = std::mem::size_of::<Vertex>();
         if self.vertex_mapped.is_null() {
             self.dynamic_count = 0;
+            self.draws.clear();
             return;
         }
         self.dynamic_count = verts.len() as u32;
+        let mut counts = draw_counts(scene, self.vertex_count as usize, verts.len());
+        counts.static_opaque = self.static_opaque.min(self.vertex_count as usize);
+        self.draws = draw_plan(&counts);
+        self.shadow_draws = [
+            DrawRange { blend_pass: false, dynamic: false, first: 0, count: counts.static_opaque },
+            DrawRange { blend_pass: false, dynamic: true, first: 0, count: counts.dynamic_opaque },
+        ]
+        .into_iter()
+        .filter(|r| r.count > 0)
+        .collect();
         unsafe {
             let destination = self.vertex_mapped.add(self.vertex_count as usize * vertex_size);
             std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, destination, verts.len() * vertex_size);
