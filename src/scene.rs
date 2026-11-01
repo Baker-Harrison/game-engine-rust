@@ -7,12 +7,13 @@ pub struct Tri {
     pub v: [Vec3; 3],
     pub n: [Vec3; 3],
     pub c: [Vec3; 3],
+    pub s: [[f32; 2]; 3],
 }
 
 impl Tri {
     pub fn flat(v: [Vec3; 3], color: Vec3) -> Tri {
         let normal = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
-        Tri { v, n: [normal; 3], c: [color; 3] }
+        Tri { v, n: [normal; 3], c: [color; 3], s: [[0.85, 0.0]; 3] }
     }
 }
 
@@ -63,6 +64,7 @@ impl Scene {
                 v: [mesh.positions[at(0)], mesh.positions[at(1)], mesh.positions[at(2)]],
                 n: [mesh.normals[at(0)], mesh.normals[at(1)], mesh.normals[at(2)]],
                 c: [mesh.colors[at(0)], mesh.colors[at(1)], mesh.colors[at(2)]],
+                s: [mesh.surfaces[at(0)], mesh.surfaces[at(1)], mesh.surfaces[at(2)]],
             });
         }
     }

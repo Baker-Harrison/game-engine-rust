@@ -49,6 +49,8 @@ fn real_main(args: &[String]) -> Result<(), String> {
     let mut out: Option<&str> = None;
     let mut renderer = "auto";
     let mut max_frames: Option<usize> = None;
+    let mut reference = false;
+    let mut samples_per_pixel = 16usize;
     let (mut pos, mut yaw, mut pitch) = (None, None, None);
     let mut i = 0;
     while i < rest.len() {
@@ -63,6 +65,14 @@ fn real_main(args: &[String]) -> Result<(), String> {
             "--out" => out = Some(val()?),
             "--renderer" => renderer = val()?,
             "--frames" => max_frames = Some(val()?.parse().map_err(|_| "bad --frames")?),
+            "--quality" => {
+                reference = match val()? {
+                    "ref" | "reference" => true,
+                    "fast" | "baked" => false,
+                    other => return Err(format!("unknown quality '{}'; use fast or ref", other)),
+                }
+            }
+            "--spp" => samples_per_pixel = val()?.parse().map_err(|_| "bad --spp")?,
             "--yaw" => yaw = Some(val()?.parse::<f32>().map_err(|_| "bad --yaw")?),
             "--pitch" => pitch = Some(val()?.parse::<f32>().map_err(|_| "bad --pitch")?),
             "--pos" => {
@@ -91,15 +101,30 @@ fn real_main(args: &[String]) -> Result<(), String> {
     if let Some(p) = pitch { scene.camera.pitch = p.to_radians(); }
 
     if cmd == "render" {
-        let out = out.ok_or("render needs --out FILE.ppm")?;
+        let out = out.ok_or("render needs --out FILE.ppm or FILE.png")?;
+        if reference {
+            let settings = engine::trace::TraceSettings { samples_per_pixel, ..Default::default() };
+            let fb = engine::trace::render(&scene, &scene.camera, width, height, settings);
+            write_framebuffer(&fb, out)?;
+            println!("wrote {} ({}x{}, reference {} spp)", out, width, height, samples_per_pixel);
+            return Ok(());
+        }
         let mut r = gfx::create_headless(renderer, width, height)?;
         r.upload_scene(&scene)?;
         let fb = r.render_offscreen(&scene, &scene.camera)?;
-        fb.write_ppm(out).map_err(|e| format!("{}: {}", out, e))?;
+        write_framebuffer(&fb, out)?;
         println!("wrote {} ({}x{})", out, width, height);
         Ok(())
     } else {
         app::run(scene, width, height, renderer, max_frames)
+    }
+}
+
+fn write_framebuffer(fb: &engine::render::Framebuffer, path: &str) -> Result<(), String> {
+    if path.ends_with(".png") {
+        engine::png::write(fb, path)
+    } else {
+        fb.write_ppm(path).map_err(|e| format!("{}: {}", path, e))
     }
 }
 
@@ -116,12 +141,22 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
     let mut overrides = Vec::new();
     let mut out: Option<&str> = None;
     let mut obj: Option<&str> = None;
+    let mut quality_name = "fast";
+    let mut samples_per_pixel = 16usize;
     let mut i = 1;
     while i < rest.len() {
         match rest[i].as_str() {
             "--out" => {
                 i += 1;
                 out = Some(rest.get(i).ok_or("--out needs a value")?);
+            }
+            "--quality" => {
+                i += 1;
+                quality_name = rest.get(i).ok_or("--quality needs a value")?;
+            }
+            "--spp" => {
+                i += 1;
+                samples_per_pixel = rest.get(i).ok_or("--spp needs a value")?.parse().map_err(|_| "bad --spp")?;
             }
             "--obj" => {
                 i += 1;
@@ -134,7 +169,12 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
     let asset = engine::assets::build(name, &overrides)?;
     if command == "inspect" {
         let out = out.ok_or("inspect needs --out DIR")?;
-        let result = engine::inspect::inspect(&asset, out)?;
+        let quality = match quality_name {
+            "ref" | "reference" => engine::inspect::Quality::Reference { samples_per_pixel },
+            "fast" | "baked" => engine::inspect::Quality::Baked,
+            other => return Err(format!("unknown quality '{}'; use fast or ref", other)),
+        };
+        let result = engine::inspect::inspect(&asset, out, quality)?;
         println!("{}", result.report);
         for file in result.files {
             println!("wrote {}", file);

@@ -5,6 +5,7 @@ pub mod input;
 pub mod math;
 pub mod platform;
 pub mod render;
+pub mod trace;
 pub mod scene;
 pub mod assets;
 pub mod inspect;

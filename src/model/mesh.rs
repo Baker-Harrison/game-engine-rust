@@ -1,11 +1,15 @@
+use super::material::{Material, Surface, SurfaceSample};
 use crate::math::Vec3;
 use std::collections::HashMap;
+
+pub const DEFAULT_SURFACE: [f32; 2] = [0.8, 0.0];
 
 #[derive(Clone, Default)]
 pub struct Mesh {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub colors: Vec<Vec3>,
+    pub surfaces: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -35,10 +39,37 @@ impl Mesh {
     }
 
     pub fn push_vertex(&mut self, position: Vec3, normal: Vec3, color: Vec3) -> u32 {
+        self.push_surface_vertex(position, normal, color, DEFAULT_SURFACE)
+    }
+
+    pub fn push_surface_vertex(&mut self, position: Vec3, normal: Vec3, color: Vec3, surface: [f32; 2]) -> u32 {
         self.positions.push(position);
         self.normals.push(normal);
         self.colors.push(color);
+        self.surfaces.push(surface);
         (self.positions.len() - 1) as u32
+    }
+
+    pub fn set_surface(&mut self, roughness: f32, metallic: f32) {
+        self.surfaces.iter_mut().for_each(|surface| *surface = [roughness, metallic]);
+    }
+
+    pub fn apply_surface(&mut self, surface: &dyn Surface) {
+        for index in 0..self.positions.len() {
+            let sample = SurfaceSample { position: self.positions[index], normal: self.normals[index], curvature: 0.0 };
+            let material = surface.evaluate(&sample);
+            self.colors[index] = material.albedo;
+            self.surfaces[index] = [material.roughness, material.metallic];
+        }
+    }
+
+    pub fn apply_material_map(&mut self, map: &dyn Fn(&SurfaceSample, Vec3) -> Material) {
+        for index in 0..self.positions.len() {
+            let sample = SurfaceSample { position: self.positions[index], normal: self.normals[index], curvature: 0.0 };
+            let material = map(&sample, self.colors[index]);
+            self.colors[index] = material.albedo;
+            self.surfaces[index] = [material.roughness, material.metallic];
+        }
     }
 
     pub fn push_triangle(&mut self, a: u32, b: u32, c: u32) {
@@ -59,6 +90,7 @@ impl Mesh {
         self.positions.extend_from_slice(&other.positions);
         self.normals.extend_from_slice(&other.normals);
         self.colors.extend_from_slice(&other.colors);
+        self.surfaces.extend_from_slice(&other.surfaces);
         self.indices.extend(other.indices.iter().map(|i| i + offset));
     }
 

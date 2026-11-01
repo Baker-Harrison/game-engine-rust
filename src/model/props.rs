@@ -152,9 +152,9 @@ fn revolve_slots(slot: Sdf) -> Sdf {
 }
 
 pub fn build_carbine(cell: f32) -> Asset {
-    let anodized = SurfacePaint::worn(ANODIZED_BASE, ANODIZED_EDGE).with_seed(3);
-    let polymer = SurfacePaint::worn(POLYMER_BASE, POLYMER_EDGE).with_grain(0.35, 900.0).with_seed(5);
-    let parkerized = SurfacePaint::worn(PARKERIZED_BASE, PARKERIZED_EDGE).with_grain(0.2, 700.0).with_seed(9);
+    let anodized = SurfacePaint::worn(ANODIZED_BASE, ANODIZED_EDGE).with_surface(0.45, 0.85).with_edge_surface(0.3, 1.0).with_seed(3);
+    let polymer = SurfacePaint::worn(POLYMER_BASE, POLYMER_EDGE).with_surface(0.7, 0.0).with_edge_surface(0.5, 0.0).with_grain(0.35, 900.0).with_seed(5);
+    let parkerized = SurfacePaint::worn(PARKERIZED_BASE, PARKERIZED_EDGE).with_surface(0.6, 0.7).with_edge_surface(0.35, 1.0).with_grain(0.2, 700.0).with_seed(9);
     let rubber = SurfacePaint::plain(RUBBER).with_grain(0.4, 800.0);
 
     let mut asset = Asset::new("carbine");

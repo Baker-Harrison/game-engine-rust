@@ -2,6 +2,7 @@ pub mod arch;
 pub mod bake;
 pub mod bvh;
 pub mod furniture;
+pub mod material;
 pub mod mesh;
 pub mod mesher;
 pub mod paint;
