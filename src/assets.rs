@@ -15,6 +15,12 @@ pub struct AssetDefinition {
 pub fn definitions() -> Vec<AssetDefinition> {
     vec![
         AssetDefinition {
+            name: "swatches",
+            summary: "one block per material in the overgrown_manor style",
+            parameters: &[("cell", 0.012)],
+            build: |p| crate::model::style::build_swatches(&crate::model::style::Style::overgrown_manor(), p.get("cell")),
+        },
+        AssetDefinition {
             name: "chair",
             summary: "dining chair with raked back, slats and tapered legs",
             parameters: &[

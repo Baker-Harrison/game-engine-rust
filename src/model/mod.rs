@@ -10,4 +10,7 @@ pub mod params;
 pub mod part;
 pub mod props;
 pub mod sdf;
+pub mod stats;
+pub mod style;
+pub mod stylized;
 pub mod validate;

@@ -10,6 +10,7 @@ pub struct Mesh {
     pub normals: Vec<Vec3>,
     pub colors: Vec<Vec3>,
     pub surfaces: Vec<[f32; 2]>,
+    pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -47,6 +48,7 @@ impl Mesh {
         self.normals.push(normal);
         self.colors.push(color);
         self.surfaces.push(surface);
+        self.uvs.push([0.0, 0.0]);
         (self.positions.len() - 1) as u32
     }
 
@@ -72,6 +74,31 @@ impl Mesh {
         }
     }
 
+    pub fn generate_uvs(&mut self, meters_per_tile: f32) {
+        let source = std::mem::take(self);
+        let mut chart_vertices: HashMap<(u32, usize), u32> = HashMap::new();
+        for triangle in 0..source.triangle_count() {
+            let [a, b, c] = source.triangle(triangle);
+            let normal = (b - a).cross(c - a);
+            let axis = dominant_axis(normal);
+            for corner in 0..3 {
+                let original = source.indices[triangle * 3 + corner];
+                let index = *chart_vertices.entry((original, axis)).or_insert_with(|| {
+                    let position = source.positions[original as usize];
+                    let created = self.push_surface_vertex(
+                        position,
+                        source.normals[original as usize],
+                        source.colors[original as usize],
+                        source.surfaces[original as usize],
+                    );
+                    self.uvs[created as usize] = chart_uv(position, axis, meters_per_tile);
+                    created
+                });
+                self.indices.push(index);
+            }
+        }
+    }
+
     pub fn push_triangle(&mut self, a: u32, b: u32, c: u32) {
         self.indices.extend_from_slice(&[a, b, c]);
     }
@@ -91,6 +118,7 @@ impl Mesh {
         self.normals.extend_from_slice(&other.normals);
         self.colors.extend_from_slice(&other.colors);
         self.surfaces.extend_from_slice(&other.surfaces);
+        self.uvs.extend_from_slice(&other.uvs);
         self.indices.extend(other.indices.iter().map(|i| i + offset));
     }
 
@@ -299,6 +327,35 @@ impl Mesh {
         }
     }
 
+    pub fn edge_dihedral_angles(&self) -> Vec<f32> {
+        let mut vertex_ids: HashMap<(i32, i32, i32), u32> = HashMap::new();
+        let welded: Vec<u32> = self
+            .positions
+            .iter()
+            .map(|p| {
+                let key = ((p.x * WELD_PRECISION).round() as i32, (p.y * WELD_PRECISION).round() as i32, (p.z * WELD_PRECISION).round() as i32);
+                let next = vertex_ids.len() as u32;
+                *vertex_ids.entry(key).or_insert(next)
+            })
+            .collect();
+        let mut edge_faces: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+        for triangle in 0..self.triangle_count() {
+            let ids = [welded[self.indices[triangle * 3] as usize], welded[self.indices[triangle * 3 + 1] as usize], welded[self.indices[triangle * 3 + 2] as usize]];
+            if ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2] {
+                continue;
+            }
+            for k in 0..3 {
+                let (a, b) = (ids[k], ids[(k + 1) % 3]);
+                edge_faces.entry((a.min(b), a.max(b))).or_default().push(triangle);
+            }
+        }
+        edge_faces
+            .values()
+            .filter(|faces| faces.len() == 2)
+            .map(|faces| self.face_normal(faces[0]).dot(self.face_normal(faces[1])).clamp(-1.0, 1.0).acos().to_degrees())
+            .collect()
+    }
+
     fn face_normal(&self, triangle: usize) -> Vec3 {
         let [a, b, c] = self.triangle(triangle);
         (b - a).cross(c - a).normalized()
@@ -333,4 +390,24 @@ fn union_sets(parents: &mut [u32], a: u32, b: u32) {
     if root_a != root_b {
         parents[root_a as usize] = root_b;
     }
+}
+
+fn dominant_axis(normal: Vec3) -> usize {
+    let (x, y, z) = (normal.x.abs(), normal.y.abs(), normal.z.abs());
+    if y >= x && y >= z {
+        1
+    } else if x >= z {
+        0
+    } else {
+        2
+    }
+}
+
+fn chart_uv(position: Vec3, axis: usize, meters_per_tile: f32) -> [f32; 2] {
+    let (u, v) = match axis {
+        0 => (position.z, position.y),
+        1 => (position.x, position.z),
+        _ => (position.x, position.y),
+    };
+    [u / meters_per_tile, v / meters_per_tile]
 }
