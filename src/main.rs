@@ -189,6 +189,7 @@ fn write_framebuffer(fb: &engine::render::Framebuffer, path: &str) -> Result<(),
 
 fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
     if command == "asset" && rest.first().map(String::as_str) == Some("list") {
+        println!("props (desert_industrial style): {}", engine::model::industrial::prop_names().join(" "));
         for definition in engine::assets::definitions() {
             println!("{}  {}", definition.name, definition.summary);
             let parameters: Vec<String> = definition.parameters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
