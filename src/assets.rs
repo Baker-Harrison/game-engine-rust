@@ -193,11 +193,15 @@ fn on_stage(mut asset: Asset) -> Asset {
 
 pub fn find(name: &str) -> Result<AssetDefinition, String> {
     let all = definitions();
-    let known: Vec<&str> = all.iter().map(|d| d.name).collect();
+    let mut known: Vec<&str> = all.iter().map(|d| d.name).collect();
+    known.extend(crate::model::industrial::prop_names());
     all.into_iter().find(|d| d.name == name).ok_or_else(|| format!("unknown asset '{}' (known: {})", name, known.join(", ")))
 }
 
 pub fn build(name: &str, overrides: &[(String, f32)]) -> Result<Asset, String> {
+    if crate::model::industrial::prop_names().contains(&name) {
+        return Ok(crate::model::industrial::build_prop(name, &crate::model::style::Style::desert_industrial())?.asset);
+    }
     let definition = find(name)?;
     let mut params = Params::with_defaults(definition.parameters);
     for (key, value) in overrides {

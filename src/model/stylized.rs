@@ -213,3 +213,42 @@ impl Surface for Skin {
         Material::new(tone * (0.96 + 0.06 * pores), 0.55 + 0.1 * pores, 0.0)
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct PaintedMetal {
+    pub paint: Vec3,
+    pub rust: Vec3,
+    pub chipping: f32,
+    pub streaks: f32,
+    pub weathering: Weathering,
+    pub seed: u32,
+}
+
+impl Surface for PaintedMetal {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        let p = sample.position;
+        let fade = fractal_noise(p.x * 0.9, p.y * 0.9, p.z * 0.9, 3, self.seed) * 0.5 + 0.5;
+        let drips = fractal_noise(p.x * 14.0, p.y * 0.5, p.z * 14.0, 3, self.seed + 1) * 0.5 + 0.5;
+        let chips = value_noise(p.x * 24.0, p.y * 24.0, p.z * 24.0, self.seed + 2);
+        let edge = (sample.curvature * 0.004).clamp(0.0, 1.0);
+        let bare = smoothstep(1.0 - self.chipping, 1.0 - self.chipping + 0.08, chips * 0.6 + fade * 0.2 + edge * 0.5 + (1.0 - fade) * 0.1);
+        let painted = Material::new(self.paint * (0.8 + 0.3 * fade) * (1.0 - 0.35 * self.streaks * drips), 0.55, 0.15);
+        let rusted = Material::new(self.rust * (0.7 + 0.5 * value_noise(p.x * 60.0, p.y * 60.0, p.z * 60.0, self.seed + 3)), 0.88, 0.25);
+        self.weathering.apply(painted.lerp(rusted, bare), sample)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Sandbag {
+    pub burlap: Vec3,
+    pub seed: u32,
+}
+
+impl Surface for Sandbag {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        let p = sample.position;
+        let weave = ((p.x * 220.0).sin() * (p.y * 220.0).sin() + (p.z * 220.0).sin() * (p.y * 220.0).sin()) * 0.05;
+        let stain = fractal_noise(p.x * 3.0, p.y * 3.0, p.z * 3.0, 3, self.seed) * 0.5 + 0.5;
+        Material::new(self.burlap * (0.75 + 0.35 * stain + weave), 0.97, 0.0)
+    }
+}
