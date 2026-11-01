@@ -1,5 +1,4 @@
 #version 450
-// Mirrors the Metal shader in src/gfx/metal.rs. Rebuild with shaders/build.sh.
 layout(location = 0) in vec4 pos;
 layout(location = 1) in vec4 normal;
 layout(location = 2) in vec4 color;
@@ -12,13 +11,18 @@ layout(push_constant) uniform U {
 } u;
 layout(location = 0) out vec3 world;
 layout(location = 1) out vec3 nrm;
-layout(location = 2) out vec3 col;
+layout(location = 2) out vec4 col;
 layout(location = 3) out float depth;
+layout(location = 4) out float kind;
 void main() {
     vec4 p = u.view_proj * vec4(pos.xyz, 1.0);
+    if (normal.w > 1.5) {
+        p = vec4(pos.x, -pos.y, pos.z, 1.0);
+    }
     gl_Position = p;
     world = pos.xyz;
     nrm = normal.xyz;
-    col = color.xyz;
+    col = color;
     depth = p.w;
+    kind = normal.w;
 }

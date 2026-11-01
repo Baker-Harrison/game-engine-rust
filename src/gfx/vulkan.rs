@@ -1,28 +1,20 @@
-//! Vulkan backend (Linux and Windows). The Vulkan loader is opened at runtime
-//! (dlopen / LoadLibrary), so the engine builds and runs without the Vulkan SDK.
-//! Shaders are checked-in SPIR-V built from shaders/*.vert|frag.
-//! One frame in flight, no swapchain recreation: the window is fixed-size.
 
 #![allow(non_snake_case, non_camel_case_types, clippy::too_many_arguments)]
 
-use super::{build_vertices, frame_uniforms, FrameUniforms, Renderer, Vertex};
+use super::{build_dynamic_vertices, build_vertices, frame_uniforms, FrameUniforms, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
 use crate::camera::Camera;
 use crate::platform::{NativeHandle, Window};
 use crate::render::Framebuffer;
 use crate::scene::Scene;
 use std::ffi::{c_char, c_void, CStr};
 
-type Handle = u64; // non-dispatchable handles
-type Ptr = *mut c_void; // dispatchable handles
+type Handle = u64;
+type Ptr = *mut c_void;
 type VkResult = i32;
-
-// ---- dynamic loading ----------------------------------------------------
 
 use crate::platform::dl;
 
 type Gipa = unsafe extern "system" fn(Ptr, *const c_char) -> *mut c_void;
-
-// ---- structs (layouts from vulkan_core.h, 64-bit) ------------------------
 
 #[repr(C)] struct ApplicationInfo { s_type: u32, p_next: *const c_void, app_name: *const c_char, app_version: u32, engine_name: *const c_char, engine_version: u32, api_version: u32 }
 #[repr(C)] struct InstanceCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, app_info: *const ApplicationInfo, layer_count: u32, layers: *const *const c_char, ext_count: u32, exts: *const *const c_char }
@@ -76,8 +68,6 @@ type Gipa = unsafe extern "system" fn(Ptr, *const c_char) -> *mut c_void;
 #[repr(C)] #[derive(Clone, Copy, Default)] struct SurfaceFormat { format: u32, color_space: u32 }
 #[repr(C)] struct XlibSurfaceCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, dpy: *mut c_void, window: std::ffi::c_ulong }
 #[repr(C)] struct Win32SurfaceCreateInfo { s_type: u32, p_next: *const c_void, flags: u32, hinstance: *mut c_void, hwnd: *mut c_void }
-
-// ---- function table -----------------------------------------------------
 
 macro_rules! vk_table {
     ($name:ident { $($f:ident($($a:ty),*) -> $r:ty;)* }) => {
@@ -149,8 +139,6 @@ vk_table!(SwapFns {
     QueuePresentKHR(Ptr, *const PresentInfo) -> VkResult;
 });
 
-// ---- constants ----------------------------------------------------------
-
 const FORMAT_BGRA8: u32 = 44;
 const FORMAT_D32: u32 = 126;
 const FORMAT_RGBA32F: u32 = 109;
@@ -194,6 +182,8 @@ pub struct VulkanRenderer {
     vertex_mem: Handle,
     vertex_capacity: u64,
     vertex_count: u32,
+    dynamic_count: u32,
+    vertex_mapped: *mut u8,
     target: Target,
     w: usize,
     h: usize,
@@ -227,7 +217,6 @@ impl VulkanRenderer {
             type CreateInstance = unsafe extern "system" fn(*const InstanceCreateInfo, *const c_void, *mut Ptr) -> VkResult;
             let create_instance: CreateInstance = std::mem::transmute(gipa(std::ptr::null_mut(), b"vkCreateInstance\0".as_ptr() as *const c_char));
 
-            // Instance (with the platform surface extension for window mode).
             let surface_ext: Option<&[u8]> = match handle {
                 Some(NativeHandle::X11 { .. }) => Some(b"VK_KHR_xlib_surface\0"),
                 Some(NativeHandle::Win32(_)) => Some(b"VK_KHR_win32_surface\0"),
@@ -255,7 +244,6 @@ impl VulkanRenderer {
             let f = Fns::load(gipa, instance)?;
             let sf = if handle.is_some() { Some(SwapFns::load(gipa, instance)?) } else { None };
 
-            // Surface.
             let mut surface: Handle = 0;
             match handle {
                 Some(NativeHandle::X11 { display, window }) => {
@@ -280,7 +268,6 @@ impl VulkanRenderer {
                 _ => {}
             }
 
-            // Physical device + graphics queue family (that can present, in window mode).
             let mut n = 0u32;
             chk!((f.EnumeratePhysicalDevices)(instance, &mut n, std::ptr::null_mut()), "vkEnumeratePhysicalDevices");
             if n == 0 {
@@ -320,7 +307,6 @@ impl VulkanRenderer {
             let mut mem = MemoryProperties { type_count: 0, types: [MemoryType::default(); 32], heap_count: 0, heaps: [MemoryHeap::default(); 16] };
             (f.GetPhysicalDeviceMemoryProperties)(phys, &mut mem);
 
-            // Logical device.
             let prio = 1.0f32;
             let qci = DeviceQueueCreateInfo { s_type: 2, p_next: std::ptr::null(), flags: 0, family, count: 1, priorities: &prio };
             let dev_exts: Vec<*const c_char> = if sf.is_some() { vec![b"VK_KHR_swapchain\0".as_ptr() as *const c_char] } else { vec![] };
@@ -335,7 +321,7 @@ impl VulkanRenderer {
 
             let mut r = VulkanRenderer {
                 f, sf, instance, device, queue, mem, render_pass: 0, layout: 0, pipeline: 0, cmd: std::ptr::null_mut(),
-                fence: 0, sem_acquire: 0, sem_render: 0, vertex_buf: 0, vertex_mem: 0, vertex_capacity: 0, vertex_count: 0,
+                fence: 0, sem_acquire: 0, sem_render: 0, vertex_buf: 0, vertex_mem: 0, vertex_capacity: 0, vertex_count: 0, dynamic_count: 0, vertex_mapped: std::ptr::null_mut(),
                 target: Target::Offscreen { image: 0, framebuffer: 0, readback: 0, readback_mem: 0 }, w, h, device_name,
             };
             r.init(phys, surface, family)?;
@@ -399,7 +385,6 @@ impl VulkanRenderer {
 
     unsafe fn init(&mut self, phys: Ptr, surface: Handle, family: u32) -> Result<(), String> {
         let windowed = self.sf.is_some();
-        // Swapchain (window mode) decides the color image set; offscreen makes its own.
         let mut sc_images: Vec<Handle> = Vec::new();
         let mut swapchain = 0;
         if let Some(sf) = &self.sf {
@@ -430,7 +415,6 @@ impl VulkanRenderer {
             chk!((sf.GetSwapchainImagesKHR)(self.device, swapchain, &mut n, sc_images.as_mut_ptr()), "vkGetSwapchainImagesKHR");
         }
 
-        // Render pass: color + depth.
         let atts = [
             AttachmentDescription { flags: 0, format: FORMAT_BGRA8, samples: 1, load: 1, store: 0, sload: 2, sstore: 1, initial: 0,
                 final_: if windowed { LAYOUT_PRESENT } else { LAYOUT_TRANSFER_SRC } },
@@ -450,10 +434,8 @@ impl VulkanRenderer {
         let rpi = RenderPassCreateInfo { s_type: 38, p_next: std::ptr::null(), flags: 0, att_count: 2, atts: atts.as_ptr(), sub_count: 1, subs: &sub, dep_count: 2, deps: deps.as_ptr() };
         chk!((self.f.CreateRenderPass)(self.device, &rpi, std::ptr::null(), &mut self.render_pass), "vkCreateRenderPass");
 
-        // Depth buffer, shared by all frames (one frame in flight).
         let (_, _, depth_view) = self.alloc_image(FORMAT_D32, 0x20, 2)?;
 
-        // Targets.
         let make_fb = |this: &Self, color_view: Handle| -> Result<Handle, String> {
             let views = [color_view, depth_view];
             let fi = FramebufferCreateInfo { s_type: 37, p_next: std::ptr::null(), flags: 0, render_pass: this.render_pass, att_count: 2,
@@ -472,11 +454,10 @@ impl VulkanRenderer {
         } else {
             let (image, _, view) = self.alloc_image(FORMAT_BGRA8, 0x10 | 0x01, 1)?;
             let framebuffer = make_fb(self, view)?;
-            let (readback, readback_mem) = self.alloc_buffer((self.w * self.h * 4) as u64, 2)?; // TRANSFER_DST
+            let (readback, readback_mem) = self.alloc_buffer((self.w * self.h * 4) as u64, 2)?;
             self.target = Target::Offscreen { image, framebuffer, readback, readback_mem };
         }
 
-        // Pipeline.
         let vs = self.shader(SPV_VERT)?;
         let fs = self.shader(SPV_FRAG)?;
         let stages = [
@@ -498,7 +479,7 @@ impl VulkanRenderer {
         let ms = MultisampleState { s_type: 24, p_next: std::ptr::null(), flags: 0, samples: 1, sample_shading: 0, min_sample: 0.0, mask: std::ptr::null(), a2c: 0, a21: 0 };
         let ds = DepthStencilState { s_type: 25, p_next: std::ptr::null(), flags: 0, test: 1, write: 1, compare: 1, bounds: 0, stencil: 0,
             front: StencilOp::default(), back: StencilOp::default(), min_depth: 0.0, max_depth: 1.0 };
-        let ba = BlendAttachment { enable: 0, sc: 0, dc: 0, co: 0, sa: 0, da: 0, ao: 0, mask: 0xF };
+        let ba = BlendAttachment { enable: 1, sc: 6, dc: 7, co: 0, sa: 1, da: 7, ao: 0, mask: 0xF };
         let bs = BlendState { s_type: 26, p_next: std::ptr::null(), flags: 0, logic_en: 0, logic: 0, att_count: 1, atts: &ba, consts: [0.0; 4] };
         let pc = PushRange { stages: 0x11, offset: 0, size: std::mem::size_of::<FrameUniforms>() as u32 };
         let li = PipelineLayoutCreateInfo { s_type: 30, p_next: std::ptr::null(), flags: 0, set_count: 0, sets: std::ptr::null(), pc_count: 1, pcs: &pc };
@@ -510,13 +491,12 @@ impl VulkanRenderer {
         };
         chk!((self.f.CreateGraphicsPipelines)(self.device, 0, 1, &gpi, std::ptr::null(), &mut self.pipeline), "vkCreateGraphicsPipelines");
 
-        // Commands and sync.
         let pi = CommandPoolCreateInfo { s_type: 39, p_next: std::ptr::null(), flags: 2, family };
         let mut pool = 0;
         chk!((self.f.CreateCommandPool)(self.device, &pi, std::ptr::null(), &mut pool), "vkCreateCommandPool");
         let ai = CommandBufferAllocateInfo { s_type: 40, p_next: std::ptr::null(), pool, level: 0, count: 1 };
         chk!((self.f.AllocateCommandBuffers)(self.device, &ai, &mut self.cmd), "vkAllocateCommandBuffers");
-        let fi = SimpleCreateInfo { s_type: 8, p_next: std::ptr::null(), flags: 1 }; // signaled
+        let fi = SimpleCreateInfo { s_type: 8, p_next: std::ptr::null(), flags: 1 };
         chk!((self.f.CreateFence)(self.device, &fi, std::ptr::null(), &mut self.fence), "vkCreateFence");
         let si = SimpleCreateInfo { s_type: 9, p_next: std::ptr::null(), flags: 0 };
         chk!((self.f.CreateSemaphore)(self.device, &si, std::ptr::null(), &mut self.sem_acquire), "vkCreateSemaphore");
@@ -535,12 +515,12 @@ impl VulkanRenderer {
             area: Rect2D { x: 0, y: 0, w: self.w as u32, h: self.h as u32 }, clear_count: 2, clears: clears.as_ptr(),
         };
         (f.CmdBeginRenderPass)(self.cmd, &rb, 0);
-        if self.vertex_count > 0 {
+        if self.vertex_count + self.dynamic_count > 0 {
             (f.CmdBindPipeline)(self.cmd, 0, self.pipeline);
             let off = 0u64;
             (f.CmdBindVertexBuffers)(self.cmd, 0, 1, &self.vertex_buf, &off);
             (f.CmdPushConstants)(self.cmd, self.layout, 0x11, 0, std::mem::size_of::<FrameUniforms>() as u32, u as *const FrameUniforms as *const c_void);
-            (f.CmdDraw)(self.cmd, self.vertex_count, 1, 0, 0);
+            (f.CmdDraw)(self.cmd, self.vertex_count + self.dynamic_count, 1, 0, 0);
         }
         (f.CmdEndRenderPass)(self.cmd);
         if let (Some((image, buffer)), true) = (readback, true) {
@@ -562,23 +542,21 @@ impl Renderer for VulkanRenderer {
 
     fn upload_scene(&mut self, scene: &Scene) -> Result<(), String> {
         let verts = build_vertices(scene);
+        let vertex_size = std::mem::size_of::<Vertex>();
         unsafe {
             chk!((self.f.DeviceWaitIdle)(self.device), "vkDeviceWaitIdle");
             self.vertex_count = verts.len() as u32;
-            if verts.is_empty() {
-                return Ok(());
-            }
-            let bytes = (verts.len() * std::mem::size_of::<Vertex>()) as u64;
+            let bytes = ((verts.len() + MAX_DYNAMIC_VERTICES) * vertex_size) as u64;
             if bytes > self.vertex_capacity {
-                let (buf, mem) = self.alloc_buffer(bytes, 0x80)?; // VERTEX_BUFFER (old buffer is leaked: scenes are uploaded rarely)
+                let (buf, mem) = self.alloc_buffer(bytes, 0x80)?;
                 self.vertex_buf = buf;
                 self.vertex_mem = mem;
                 self.vertex_capacity = bytes;
+                let mut p: *mut c_void = std::ptr::null_mut();
+                chk!((self.f.MapMemory)(self.device, self.vertex_mem, 0, bytes, 0, &mut p), "vkMapMemory");
+                self.vertex_mapped = p as *mut u8;
             }
-            let mut p: *mut c_void = std::ptr::null_mut();
-            chk!((self.f.MapMemory)(self.device, self.vertex_mem, 0, bytes, 0, &mut p), "vkMapMemory");
-            std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, p as *mut u8, bytes as usize);
-            (self.f.UnmapMemory)(self.device, self.vertex_mem);
+            std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, self.vertex_mapped, verts.len() * vertex_size);
         }
         Ok(())
     }
@@ -590,8 +568,9 @@ impl Renderer for VulkanRenderer {
                 Target::Window { swapchain, framebuffers, .. } => (*swapchain, framebuffers.clone()),
                 Target::Offscreen { .. } => return Err("headless Vulkan renderer has no window".into()),
             };
-            let sf = self.sf.as_ref().unwrap();
             chk!((self.f.WaitForFences)(self.device, 1, &self.fence, 1, u64::MAX), "vkWaitForFences");
+            self.write_dynamic(scene);
+            let sf = self.sf.as_ref().unwrap();
             let mut index = 0u32;
             let r = (sf.AcquireNextImageKHR)(self.device, swapchain, u64::MAX, self.sem_acquire, 0, &mut index);
             if r != 0 && r != 1000001003 {
@@ -621,6 +600,7 @@ impl Renderer for VulkanRenderer {
                 Target::Window { .. } => return Err("windowed Vulkan renderer cannot render offscreen".into()),
             };
             chk!((self.f.WaitForFences)(self.device, 1, &self.fence, 1, u64::MAX), "vkWaitForFences");
+            self.write_dynamic(scene);
             chk!((self.f.ResetFences)(self.device, 1, &self.fence), "vkResetFences");
             self.record(framebuffer, &u, Some((image, readback)))?;
             let si = SubmitInfo { s_type: 4, p_next: std::ptr::null(), wait_count: 0, waits: std::ptr::null(), stages: std::ptr::null(), cmd_count: 1,
@@ -633,7 +613,7 @@ impl Renderer for VulkanRenderer {
             let src = std::slice::from_raw_parts(p as *const u8, bytes as usize);
             let mut fb = Framebuffer::new(self.w, self.h);
             for (px, b) in fb.pixels.iter_mut().zip(src.chunks_exact(4)) {
-                *px = (b[2] as u32) << 16 | (b[1] as u32) << 8 | b[0] as u32; // BGRA -> 0x00RRGGBB
+                *px = (b[2] as u32) << 16 | (b[1] as u32) << 8 | b[0] as u32;
             }
             (self.f.UnmapMemory)(self.device, readback_mem);
             Ok(fb)
@@ -642,6 +622,20 @@ impl Renderer for VulkanRenderer {
 }
 
 impl VulkanRenderer {
+    fn write_dynamic(&mut self, scene: &Scene) {
+        let verts = build_dynamic_vertices(scene);
+        let vertex_size = std::mem::size_of::<Vertex>();
+        if self.vertex_mapped.is_null() {
+            self.dynamic_count = 0;
+            return;
+        }
+        self.dynamic_count = verts.len() as u32;
+        unsafe {
+            let destination = self.vertex_mapped.add(self.vertex_count as usize * vertex_size);
+            std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, destination, verts.len() * vertex_size);
+        }
+    }
+
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
@@ -649,7 +643,6 @@ impl VulkanRenderer {
 
 impl Drop for VulkanRenderer {
     fn drop(&mut self) {
-        // Resources are reclaimed by the OS at process exit; just make sure the GPU is idle.
         unsafe {
             (self.f.DeviceWaitIdle)(self.device);
             let _ = (self.instance, &self.queue);

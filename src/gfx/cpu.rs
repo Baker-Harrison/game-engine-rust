@@ -19,7 +19,7 @@ impl Renderer for CpuRenderer {
         "cpu"
     }
     fn upload_scene(&mut self, _scene: &Scene) -> Result<(), String> {
-        Ok(()) // the CPU renderer reads the scene directly
+        Ok(())
     }
     fn render(&mut self, scene: &Scene, cam: &Camera, window: &mut dyn Window) -> Result<(), String> {
         render(scene, cam, &mut self.fb);

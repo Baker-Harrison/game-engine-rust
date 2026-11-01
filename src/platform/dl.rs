@@ -1,4 +1,3 @@
-//! Runtime loading of system libraries (dlopen / LoadLibrary), so building needs no dev packages.
 
 #[cfg(unix)]
 mod imp {
@@ -11,7 +10,7 @@ mod imp {
     pub unsafe fn open(names: &[&str]) -> *mut c_void {
         for n in names {
             let c = std::ffi::CString::new(*n).unwrap();
-            let h = dlopen(c.as_ptr(), 2); // RTLD_NOW
+            let h = dlopen(c.as_ptr(), 2);
             if !h.is_null() {
                 return h;
             }

@@ -1,9 +1,6 @@
-//! macOS backend: AppKit driven through the Objective-C runtime with raw FFI.
-//! No custom Objective-C classes are needed: we pump events by hand and show
-//! frames by assigning a CGImage to the content view's layer.
 
 use super::Window;
-use crate::input::Input;
+use crate::input::{Button, Input, Key};
 use crate::render::Framebuffer;
 use std::ffi::c_void;
 
@@ -53,13 +50,43 @@ extern "C" fn release_pixels(info: *mut c_void, _data: *const c_void, _size: usi
     unsafe { drop(Box::from_raw(info as *mut Vec<u32>)) };
 }
 
-// NSEvent types
 const KEY_DOWN: usize = 10;
 const KEY_UP: usize = 11;
 const FLAGS_CHANGED: usize = 12;
-const MOUSE_DOWNS: [usize; 3] = [1, 3, 25];
 const MOUSE_MOVES: [usize; 4] = [5, 6, 7, 27];
 const SHIFT_FLAG: usize = 1 << 17;
+const CONTROL_FLAG: usize = 1 << 18;
+const OPTION_FLAG: usize = 1 << 19;
+
+fn key_from_code(code: u16) -> Option<Key> {
+    const LETTERS: [(u16, char); 26] = [
+        (0, 'a'), (11, 'b'), (8, 'c'), (2, 'd'), (14, 'e'), (3, 'f'), (5, 'g'), (4, 'h'), (34, 'i'),
+        (38, 'j'), (40, 'k'), (37, 'l'), (46, 'm'), (45, 'n'), (31, 'o'), (35, 'p'), (12, 'q'),
+        (15, 'r'), (1, 's'), (17, 't'), (32, 'u'), (9, 'v'), (13, 'w'), (7, 'x'), (16, 'y'), (6, 'z'),
+    ];
+    const DIGITS: [(u16, char); 10] = [
+        (29, '0'), (18, '1'), (19, '2'), (20, '3'), (21, '4'), (23, '5'), (22, '6'), (26, '7'), (28, '8'), (25, '9'),
+    ];
+    if let Some((_, character)) = LETTERS.iter().chain(DIGITS.iter()).find(|(c, _)| *c == code) {
+        return Key::from_char(*character);
+    }
+    match code {
+        49 => Some(Key::Space),
+        48 => Some(Key::Tab),
+        53 => Some(Key::Escape),
+        36 => Some(Key::Enter),
+        51 => Some(Key::Backspace),
+        123 => Some(Key::Left),
+        124 => Some(Key::Right),
+        125 => Some(Key::Down),
+        126 => Some(Key::Up),
+        122 => Some(Key::F1),
+        120 => Some(Key::F2),
+        99 => Some(Key::F3),
+        118 => Some(Key::F4),
+        _ => None,
+    }
+}
 
 pub struct MacWindow {
     app: Id,
@@ -78,10 +105,9 @@ impl MacWindow {
             if app.is_null() {
                 return Err("could not create NSApplication".into());
             }
-            send!(bool; app, "setActivationPolicy:", isize = 0); // regular app with Dock icon
+            send!(bool; app, "setActivationPolicy:", isize = 0);
             let rect = NSRect { x: 0.0, y: 0.0, w: w as f64, h: h as f64 };
             let alloc = send!(Id; class("NSWindow"), "alloc");
-            // titled | closable | miniaturizable, buffered backing, not deferred
             let window = send!(Id; alloc, "initWithContentRect:styleMask:backing:defer:",
                 NSRect = rect, usize = 1 | 2 | 4, usize = 2, bool = false);
             if window.is_null() {
@@ -114,25 +140,24 @@ impl Window for MacWindow {
                 }
                 let ty = send!(usize; ev, "type");
                 if ty == KEY_DOWN || ty == KEY_UP {
-                    let down = ty == KEY_DOWN;
-                    let code = send!(u16; ev, "keyCode");
-                    match code {
-                        13 | 126 => input.forward = down, // W, Up
-                        1 | 125 => input.back = down,     // S, Down
-                        0 | 123 => input.left = down,     // A, Left
-                        2 | 124 => input.right = down,    // D, Right
-                        53 if down => input.quit = true,  // Esc
-                        48 if down => input.toggle_capture = true, // Tab
-                        _ => {}
+                    if let Some(key) = key_from_code(send!(u16; ev, "keyCode")) {
+                        input.set_key(key, ty == KEY_DOWN);
                     }
-                    continue; // do not forward: avoids the system beep
-                }
-                if ty == FLAGS_CHANGED {
-                    input.sprint = send!(usize; ev, "modifierFlags") & SHIFT_FLAG != 0;
                     continue;
                 }
-                if MOUSE_DOWNS.contains(&ty) {
-                    input.click = true;
+                if ty == FLAGS_CHANGED {
+                    let flags = send!(usize; ev, "modifierFlags");
+                    input.set_key(Key::Shift, flags & SHIFT_FLAG != 0);
+                    input.set_key(Key::Control, flags & CONTROL_FLAG != 0);
+                    input.set_key(Key::Alt, flags & OPTION_FLAG != 0);
+                    continue;
+                }
+                match ty {
+                    1 | 2 => input.set_button(Button::Left, ty == 1),
+                    3 | 4 => input.set_button(Button::Right, ty == 3),
+                    25 | 26 => input.set_button(Button::Middle, ty == 25),
+                    22 => input.wheel += send!(f64; ev, "scrollingDeltaY") as f32 * 0.1,
+                    _ => {}
                 }
                 if MOUSE_MOVES.contains(&ty) && self.captured {
                     input.mouse_dx += send!(f64; ev, "deltaX") as f32;
@@ -160,7 +185,6 @@ impl Window for MacWindow {
             let info = Box::into_raw(buf) as *mut c_void;
             let provider = CGDataProviderCreateWithData(info, data, size, release_pixels);
             let space = CGColorSpaceCreateDeviceRGB();
-            // AlphaNoneSkipFirst | ByteOrder32Little: memory B,G,R,x == our 0x00RRGGBB.
             let img = CGImageCreate(
                 fb.width, fb.height, 8, 32, fb.width * 4, space, 6 | (2 << 12),
                 provider, std::ptr::null(), false, 0,

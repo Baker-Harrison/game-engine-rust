@@ -1,7 +1,6 @@
-//! Linux/X11 backend: raw FFI to libX11. Used for development and testing.
 
 use super::{dl, NativeHandle, Window};
-use crate::input::Input;
+use crate::input::{Button, Input, Key};
 use crate::render::Framebuffer;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, CString};
 
@@ -75,19 +74,42 @@ xlib_table! {
 const KEY_PRESS_MASK: c_long = 1;
 const KEY_RELEASE_MASK: c_long = 2;
 const BUTTON_PRESS_MASK: c_long = 4;
+const BUTTON_RELEASE_MASK: c_long = 8;
 const POINTER_MOTION_MASK: c_long = 1 << 6;
 const FOCUS_CHANGE_MASK: c_long = 1 << 21;
 
 const KEY_PRESS: i32 = 2;
 const KEY_RELEASE: i32 = 3;
 const BUTTON_PRESS: i32 = 4;
+const BUTTON_RELEASE: i32 = 5;
 const MOTION_NOTIFY: i32 = 6;
 const FOCUS_OUT: i32 = 10;
 const CLIENT_MESSAGE: i32 = 33;
 
-// 64-bit Xlib event layout offsets.
 unsafe fn field<T: Copy>(ev: &XEvent, off: usize) -> T {
     std::ptr::read_unaligned((ev as *const XEvent as *const u8).add(off) as *const T)
+}
+
+fn key_from_keysym(keysym: u32) -> Option<Key> {
+    match keysym {
+        0x20..=0x7e => Key::from_char(char::from_u32(keysym)?),
+        0xffe1 | 0xffe2 => Some(Key::Shift),
+        0xffe3 | 0xffe4 => Some(Key::Control),
+        0xffe9 | 0xffea => Some(Key::Alt),
+        0xff09 => Some(Key::Tab),
+        0xff1b => Some(Key::Escape),
+        0xff0d => Some(Key::Enter),
+        0xff08 => Some(Key::Backspace),
+        0xff51 => Some(Key::Left),
+        0xff52 => Some(Key::Up),
+        0xff53 => Some(Key::Right),
+        0xff54 => Some(Key::Down),
+        0xffbe => Some(Key::F1),
+        0xffbf => Some(Key::F2),
+        0xffc0 => Some(Key::F3),
+        0xffc1 => Some(Key::F4),
+        _ => None,
+    }
 }
 
 pub struct X11Window {
@@ -117,7 +139,7 @@ impl X11Window {
             let win = (x.XCreateSimpleWindow)(d, (x.XRootWindow)(d, s), 0, 0, w as c_uint, h as c_uint, 0, black, black);
             let t = CString::new(title).unwrap();
             (x.XStoreName)(d, win, t.as_ptr());
-            (x.XSelectInput)(d, win, KEY_PRESS_MASK | KEY_RELEASE_MASK | BUTTON_PRESS_MASK | POINTER_MOTION_MASK | FOCUS_CHANGE_MASK);
+            (x.XSelectInput)(d, win, KEY_PRESS_MASK | KEY_RELEASE_MASK | BUTTON_PRESS_MASK | POINTER_MOTION_MASK | FOCUS_CHANGE_MASK | BUTTON_RELEASE_MASK);
             let name = CString::new("WM_DELETE_WINDOW").unwrap();
             let mut wm_delete = (x.XInternAtom)(d, name.as_ptr(), 0);
             (x.XSetWMProtocols)(d, win, &mut wm_delete, 1);
@@ -159,18 +181,21 @@ impl Window for X11Window {
                 match field::<i32>(&ev, 0) {
                     KEY_PRESS | KEY_RELEASE => {
                         let down = field::<i32>(&ev, 0) == KEY_PRESS;
-                        match (self.x.XLookupKeysym)(&mut ev, 0) {
-                            0x77 | 0xff52 => input.forward = down,
-                            0x73 | 0xff54 => input.back = down,
-                            0x61 | 0xff51 => input.left = down,
-                            0x64 | 0xff53 => input.right = down,
-                            0xffe1 | 0xffe2 => input.sprint = down,
-                            0xff1b if down => input.quit = true,
-                            0xff09 if down => input.toggle_capture = true,
+                        if let Some(key) = key_from_keysym((self.x.XLookupKeysym)(&mut ev, 0) as u32) {
+                            input.set_key(key, down);
+                        }
+                    }
+                    BUTTON_PRESS | BUTTON_RELEASE => {
+                        let pressed = field::<i32>(&ev, 0) == BUTTON_PRESS;
+                        match field::<u32>(&ev, 84) {
+                            1 => input.set_button(Button::Left, pressed),
+                            2 => input.set_button(Button::Middle, pressed),
+                            3 => input.set_button(Button::Right, pressed),
+                            4 if pressed => input.wheel += 1.0,
+                            5 if pressed => input.wheel -= 1.0,
                             _ => {}
                         }
                     }
-                    BUTTON_PRESS => input.click = true,
                     MOTION_NOTIFY => {
                         let (x, y) = (field::<i32>(&ev, 64), field::<i32>(&ev, 68));
                         if !(x == cx && y == cy) {
@@ -223,7 +248,7 @@ impl Window for X11Window {
     fn set_capture(&mut self, on: bool) {
         unsafe {
             if on {
-                let r = (self.x.XGrabPointer)(self.d, self.win, 1, (BUTTON_PRESS_MASK | POINTER_MOTION_MASK) as c_uint, 1, 1, self.win, self.blank_cursor, 0);
+                let r = (self.x.XGrabPointer)(self.d, self.win, 1, (BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK) as c_uint, 1, 1, self.win, self.blank_cursor, 0);
                 if r != 0 {
                     return;
                 }
