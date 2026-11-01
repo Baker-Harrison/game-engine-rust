@@ -83,3 +83,39 @@ fn albedo_texture_replaces_vertex_colour() {
     let (r, g, b) = ((pixel >> 16) & 255, (pixel >> 8) & 255, pixel & 255);
     assert!(r > 80 && g < 40 && b < 40, "pixel {} {} {}", r, g, b);
 }
+
+#[test]
+fn gpu_textured_render_matches_cpu_reference() {
+    let name = if cfg!(target_os = "macos") { "metal" } else { "vulkan" };
+    let mut texture = checker(64, [230, 200, 150, 255], [60, 50, 40, 255]);
+    for y in 0..64 {
+        for x in 0..64 {
+            if (x / 8 + y / 8) % 2 == 0 {
+                texture.set(x, y, [200, 60, 60, 255]);
+            }
+        }
+    }
+    let scene = floor_scene(&texture, 12.0);
+    let camera = Camera::look_at(Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.0, 0.0, 6.0), 70.0);
+    let (w, h) = (320, 200);
+    let mut cpu = engine::gfx::create_headless("cpu", w, h).unwrap();
+    let mut gpu = match engine::gfx::create_headless(name, w, h) {
+        Ok(gpu) => gpu,
+        Err(e) if e.contains("no Vulkan") || e.contains("no Metal") => return,
+        Err(e) => panic!("{} failed to start: {}", name, e),
+    };
+    cpu.upload_scene(&scene).unwrap();
+    gpu.upload_scene(&scene).unwrap();
+    let a = cpu.render_offscreen(&scene, &camera).unwrap();
+    let b = gpu.render_offscreen(&scene, &camera).unwrap();
+    a.write_ppm("/tmp/cpu.ppm").unwrap();
+    b.write_ppm("/tmp/gpu.ppm").unwrap();
+    let mut total = 0u64;
+    for (x, y) in a.pixels.iter().zip(&b.pixels) {
+        for shift in [0, 8, 16] {
+            total += (((x >> shift) & 255) as i64 - ((y >> shift) & 255) as i64).unsigned_abs();
+        }
+    }
+    let mean = total as f64 / (a.pixels.len() * 3) as f64;
+    assert!(mean < 8.0, "mean channel difference {}", mean);
+}

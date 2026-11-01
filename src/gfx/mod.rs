@@ -18,6 +18,7 @@ pub struct Vertex {
     pub pos: [f32; 4],
     pub normal: [f32; 4],
     pub color: [f32; 4],
+    pub uv: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -38,12 +39,18 @@ fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
     let kind = if triangle.unlit { KIND_UNLIT } else { KIND_LIT };
     for i in 0..3 {
         let (v, n, c) = (triangle.v[i], triangle.n[i], triangle.c[i]);
-        out.push(Vertex { pos: [v.x, v.y, v.z, 1.0], normal: [n.x, n.y, n.z, kind], color: [c.x, c.y, c.z, 1.0] });
+        let layer = if triangle.unlit { 0.0 } else { triangle.material as f32 };
+        out.push(Vertex {
+            pos: [v.x, v.y, v.z, 1.0],
+            normal: [n.x, n.y, n.z, kind],
+            color: [c.x, c.y, c.z, 1.0],
+            uv: [triangle.t[i][0], triangle.t[i][1], layer, 0.0],
+        });
     }
 }
 
 fn overlay_vertex(x: f32, y: f32, depth: f32, color: crate::math::Vec3, alpha: f32) -> Vertex {
-    Vertex { pos: [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0], normal: [0.0, 0.0, 1.0, KIND_SCREEN], color: [color.x, color.y, color.z, alpha] }
+    Vertex { pos: [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0], normal: [0.0, 0.0, 1.0, KIND_SCREEN], color: [color.x, color.y, color.z, alpha], uv: [0.0; 4] }
 }
 
 fn push_overlay_rect(out: &mut Vec<Vertex>, rect: &OverlayRect, depth: f32) {
@@ -151,4 +158,55 @@ pub fn available() -> &'static str {
     } else {
         "cpu, vulkan"
     }
+}
+
+pub struct MaterialLevel {
+    pub width: usize,
+    pub height: usize,
+    pub albedo: Vec<u8>,
+    pub normal: Vec<u8>,
+    pub packed: Vec<u8>,
+}
+
+pub struct MaterialArrays {
+    pub layers: usize,
+    pub levels: Vec<MaterialLevel>,
+}
+
+fn fit_level(source: &crate::mips::MipTexture, width: usize, height: usize, level: usize) -> Vec<u8> {
+    let texture = &source.levels[level.min(source.levels.len() - 1)];
+    let mut out = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let sx = x * texture.width / width;
+            let sy = y * texture.height / height;
+            out.extend_from_slice(&texture.get(sx, sy));
+        }
+    }
+    out
+}
+
+pub fn pack_materials(scene: &Scene) -> Option<MaterialArrays> {
+    if scene.materials.is_empty() {
+        return None;
+    }
+    let (base_width, base_height) = scene.materials.iter().fold((1, 1), |size, maps| {
+        let (w, h) = maps.albedo.base_size();
+        (size.0.max(w), size.1.max(h))
+    });
+    let level_count = (base_width.max(base_height) as f32).log2().floor() as usize + 1;
+    let mut levels = Vec::with_capacity(level_count);
+    for level in 0..level_count {
+        let (width, height) = ((base_width >> level).max(1), (base_height >> level).max(1));
+        let mut packed_level = MaterialLevel { width, height, albedo: Vec::new(), normal: Vec::new(), packed: Vec::new() };
+        for maps in &scene.materials {
+            let (own_width, _) = maps.albedo.base_size();
+            let source_level = (own_width as f32 / width as f32).max(1.0).log2().floor() as usize;
+            packed_level.albedo.extend(fit_level(&maps.albedo, width, height, source_level));
+            packed_level.normal.extend(fit_level(&maps.normal, width, height, source_level));
+            packed_level.packed.extend(fit_level(&maps.packed, width, height, source_level));
+        }
+        levels.push(packed_level);
+    }
+    Some(MaterialArrays { layers: scene.materials.len(), levels })
 }

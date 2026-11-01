@@ -1,5 +1,5 @@
 
-use super::{build_dynamic_vertices, build_vertices, frame_uniforms, FrameUniforms, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
+use super::{build_dynamic_vertices, build_vertices, frame_uniforms, pack_materials, FrameUniforms, MaterialArrays, MaterialLevel, Renderer, Vertex, MAX_DYNAMIC_VERTICES};
 use crate::camera::Camera;
 use crate::platform::objc::*;
 use crate::platform::{NativeHandle, Window};
@@ -40,7 +40,7 @@ const SHADER: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
 
-struct Vertex { float4 pos; float4 normal; float4 color; };
+struct Vertex { float4 pos; float4 normal; float4 color; float4 uv; };
 struct U { float4x4 view_proj; float4 eye; float4 sky; float4 sun; float4 params; };
 struct VOut {
     float4 position [[position]];
@@ -49,6 +49,8 @@ struct VOut {
     float4 color;
     float depth;
     float kind;
+    float2 uv;
+    float layer [[flat]];
 };
 
 vertex VOut vs(uint vid [[vertex_id]], constant Vertex* verts [[buffer(0)]], constant U& u [[buffer(1)]]) {
@@ -60,18 +62,62 @@ vertex VOut vs(uint vid [[vertex_id]], constant Vertex* verts [[buffer(0)]], con
     o.color = v.color;
     o.kind = v.normal.w;
     o.depth = o.position.w;
+    o.uv = v.uv.xy;
+    o.layer = v.uv.z;
     return o;
 }
 
-fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]]) {
+fragment float4 fs(VOut i [[stage_in]], constant U& u [[buffer(1)]],
+                   texture2d_array<float> albedo_tex [[texture(0)]],
+                   texture2d_array<float> normal_tex [[texture(1)]],
+                   texture2d_array<float> packed_tex [[texture(2)]],
+                   sampler material_sampler [[sampler(0)]]) {
     if (i.kind > 1.5) return i.color;
     float3 n = normalize(i.normal);
-    if (dot(n, u.eye.xyz - i.world) < 0.0) n = -n;
-    float shade = u.sun.w + (1.0 - u.sun.w) * max(dot(n, u.sun.xyz), 0.0);
+    float3 to_eye = normalize(u.eye.xyz - i.world);
+    if (dot(n, to_eye) < 0.0) n = -n;
+    float3 base = i.color.xyz;
+    float roughness = 0.85;
+    float metallic = 0.0;
+    float occlusion = 1.0;
+    bool textured = i.layer > 0.5 && i.kind < 0.5;
+    float3 dp1 = dfdx(i.world);
+    float3 dp2 = dfdy(i.world);
+    float2 duv1 = dfdx(i.uv);
+    float2 duv2 = dfdy(i.uv);
+    if (textured) {
+        uint slice = uint(i.layer - 1.0 + 0.5);
+        float3 dp2perp = cross(dp2, n);
+        float3 dp1perp = cross(n, dp1);
+        float3 tangent = dp2perp * duv1.x + dp1perp * duv2.x;
+        float3 bitangent = dp2perp * duv1.y + dp1perp * duv2.y;
+        float inverse_scale = rsqrt(max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 1e-20));
+        float3 texel_normal = normal_tex.sample(material_sampler, i.uv, slice).xyz * 2.0 - 1.0;
+        float3 perturbed = tangent * inverse_scale * texel_normal.x + bitangent * inverse_scale * texel_normal.y + n * texel_normal.z;
+        if (dot(perturbed, perturbed) > 1e-8) n = normalize(perturbed);
+        base = albedo_tex.sample(material_sampler, i.uv, slice).xyz;
+        float3 surface = packed_tex.sample(material_sampler, i.uv, slice).xyz;
+        roughness = max(surface.x, 0.04);
+        metallic = surface.y;
+        occlusion = surface.z;
+    }
+    float ambient = u.sun.w;
+    float facing = max(dot(n, u.sun.xyz), 0.0);
+    float shade = ambient * occlusion + (1.0 - ambient) * facing;
     if (i.kind > 0.5) shade = 1.0;
+    float3 lit = base * shade;
+    if (textured) {
+        float3 half_vector = normalize(u.sun.xyz + to_eye);
+        float r4 = max(roughness * roughness * roughness * roughness, 0.0004);
+        float sharpness = min(2.0 / r4 - 2.0, 2000.0);
+        float highlight = pow(max(dot(n, half_vector), 0.0), sharpness);
+        float strength = highlight * facing * (1.0 - roughness) * 0.6;
+        float3 tint = mix(float3(1.0), base, metallic);
+        lit = base * (1.0 - metallic * 0.8) * shade + tint * strength;
+    }
     float t = clamp(i.depth / u.params.x, 0.0, 1.0);
     t = t * t;
-    return float4(mix(i.color.xyz * shade, u.sky.xyz, t), 1.0);
+    return float4(mix(lit, u.sky.xyz, t), 1.0);
 }
 "#;
 
@@ -86,6 +132,8 @@ pub struct MetalRenderer {
     vertex_count: usize,
     dynamic_buffers: [Id; 2],
     dynamic_count: usize,
+    material_textures: [Id; 3],
+    material_sampler: Id,
     in_flight: [Id; 2],
     frame: usize,
     w: usize,
@@ -181,7 +229,7 @@ impl MetalRenderer {
         if dynamic_buffers.iter().any(|b| b.is_null()) {
             return Err("Metal dynamic vertex buffer allocation failed".into());
         }
-        Ok(MetalRenderer {
+        let mut renderer = MetalRenderer {
             device,
             queue,
             pipeline,
@@ -192,11 +240,67 @@ impl MetalRenderer {
             vertex_count: 0,
             dynamic_buffers,
             dynamic_count: 0,
+            material_textures: [std::ptr::null_mut(); 3],
+            material_sampler: std::ptr::null_mut(),
             in_flight: [std::ptr::null_mut(); 2],
             frame: 0,
             w,
             h,
-        })
+        };
+        let sampler_desc = send!(Id; send!(Id; class("MTLSamplerDescriptor"), "alloc"), "init");
+        send!((); sampler_desc, "setMinFilter:", usize = 1);
+        send!((); sampler_desc, "setMagFilter:", usize = 1);
+        send!((); sampler_desc, "setMipFilter:", usize = 2);
+        send!((); sampler_desc, "setSAddressMode:", usize = 2);
+        send!((); sampler_desc, "setTAddressMode:", usize = 2);
+        renderer.material_sampler = send!(Id; device, "newSamplerStateWithDescriptor:", Id = sampler_desc);
+        if renderer.material_sampler.is_null() {
+            return Err("Metal sampler creation failed".into());
+        }
+        renderer.upload_materials(None)?;
+        Ok(renderer)
+    }
+
+    unsafe fn upload_materials(&mut self, arrays: Option<&MaterialArrays>) -> Result<(), String> {
+        let fallback = MaterialArrays {
+            layers: 1,
+            levels: vec![MaterialLevel { width: 1, height: 1, albedo: vec![255; 4], normal: vec![128, 128, 255, 255], packed: vec![220, 0, 255, 255] }],
+        };
+        let arrays = arrays.unwrap_or(&fallback);
+        let storage = if cfg!(target_arch = "aarch64") { 0 } else { 1 };
+        let base = &arrays.levels[0];
+        let kinds: [fn(&MaterialLevel) -> &Vec<u8>; 3] = [|l| &l.albedo, |l| &l.normal, |l| &l.packed];
+        for (index, kind) in kinds.iter().enumerate() {
+            let desc = send!(Id; send!(Id; class("MTLTextureDescriptor"), "alloc"), "init");
+            send!((); desc, "setTextureType:", usize = 3);
+            send!((); desc, "setPixelFormat:", usize = 70);
+            send!((); desc, "setWidth:", usize = base.width);
+            send!((); desc, "setHeight:", usize = base.height);
+            send!((); desc, "setMipmapLevelCount:", usize = arrays.levels.len());
+            send!((); desc, "setArrayLength:", usize = arrays.layers);
+            send!((); desc, "setUsage:", usize = 1);
+            send!((); desc, "setStorageMode:", usize = storage);
+            let texture = send!(Id; self.device, "newTextureWithDescriptor:", Id = desc);
+            if texture.is_null() {
+                return Err("Metal material texture creation failed".into());
+            }
+            for (level_index, level) in arrays.levels.iter().enumerate() {
+                let data = kind(level);
+                let layer_bytes = level.width * level.height * 4;
+                for layer in 0..arrays.layers {
+                    send!((); texture, "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:",
+                        Region = Region { origin: [0, 0, 0], size: [level.width, level.height, 1] },
+                        usize = level_index, usize = layer,
+                        *const c_void = data.as_ptr().add(layer * layer_bytes) as *const c_void,
+                        usize = level.width * 4, usize = layer_bytes);
+                }
+            }
+            if !self.material_textures[index].is_null() {
+                send!((); self.material_textures[index], "release");
+            }
+            self.material_textures[index] = texture;
+        }
+        Ok(())
     }
 
     unsafe fn encode(&self, target: Id, u: &FrameUniforms, slot: usize) -> Id {
@@ -221,6 +325,10 @@ impl MetalRenderer {
         let uniforms_size = std::mem::size_of::<FrameUniforms>();
         send!((); enc, "setVertexBytes:length:atIndex:", *const c_void = uniforms, usize = uniforms_size, usize = 1);
         send!((); enc, "setFragmentBytes:length:atIndex:", *const c_void = uniforms, usize = uniforms_size, usize = 1);
+        for (index, texture) in self.material_textures.iter().enumerate() {
+            send!((); enc, "setFragmentTexture:atIndex:", Id = *texture, usize = index);
+        }
+        send!((); enc, "setFragmentSamplerState:atIndex:", Id = self.material_sampler, usize = 0);
         for (buffer, count) in [(self.vertex_buf, self.vertex_count), (self.dynamic_buffers[slot], self.dynamic_count)] {
             if count > 0 && !buffer.is_null() {
                 send!((); enc, "setVertexBuffer:offset:atIndex:", Id = buffer, usize = 0, usize = 0);
@@ -258,6 +366,8 @@ impl Renderer for MetalRenderer {
     fn upload_scene(&mut self, scene: &Scene) -> Result<(), String> {
         let verts = build_vertices(scene);
         unsafe {
+            let arrays = pack_materials(scene);
+            self.upload_materials(arrays.as_ref())?;
             self.vertex_count = verts.len();
             if verts.is_empty() {
                 return Ok(());

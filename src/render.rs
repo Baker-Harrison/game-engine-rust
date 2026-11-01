@@ -131,7 +131,7 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
 
     for tri in scene.tris.iter().chain(scene.dynamic.iter()) {
         let [a, b, c] = tri.v;
-        let facing_away = (b - a).cross(c - a).dot(cam.pos - a) < 0.0;
+        let facing_away = (tri.n[0] + tri.n[1] + tri.n[2]).dot(cam.pos - a) < 0.0;
         let normal_sign = if facing_away { -1.0 } else { 1.0 };
 
         let corners: [ViewVertex; 3] = std::array::from_fn(|i| ViewVertex {
