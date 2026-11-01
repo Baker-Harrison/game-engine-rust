@@ -1,5 +1,5 @@
 use super::material::{Material, Surface, SurfaceSample};
-use super::style::Style;
+use super::style::{AlphaKind, Style};
 use crate::math::Vec3;
 use crate::texture::Texture;
 
@@ -82,6 +82,33 @@ pub fn bake_surface(surface: &dyn Surface, tile_meters: f32, size: usize) -> Mat
 impl Style {
     pub fn bake_material_maps(&self, name: &str, size: usize) -> Result<MaterialMaps, String> {
         let surface = self.material(name)?;
-        Ok(bake_surface(&*surface, self.meters_per_tile, size))
+        let mut maps = bake_surface(&*surface, self.meters_per_tile, size);
+        if let Some(kind) = self.alpha.get(name) {
+            apply_alpha(&mut maps, *kind);
+        }
+        Ok(maps)
+    }
+}
+
+fn leaf_coverage(u: f32, v: f32) -> f32 {
+    let half_width = 0.5 * (std::f32::consts::PI * v.clamp(0.0, 1.0).powf(0.8)).sin().max(0.0).powf(0.7);
+    let inside = (u - 0.5).abs() < half_width;
+    let midrib = (u - 0.5).abs() < 0.015 && v < 0.98;
+    if inside || midrib { 1.0 } else { 0.0 }
+}
+
+fn apply_alpha(maps: &mut MaterialMaps, kind: AlphaKind) {
+    let size = maps.albedo.width;
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = ((x as f32 + 0.5) / size as f32, (y as f32 + 0.5) / size as f32);
+            let alpha = match kind {
+                AlphaKind::LeafCutout => leaf_coverage(u, v),
+                AlphaKind::GlassBlend(value) => value,
+            };
+            let mut texel = maps.albedo.get(x, y);
+            texel[3] = to_byte(alpha);
+            maps.albedo.set(x, y, texel);
+        }
     }
 }

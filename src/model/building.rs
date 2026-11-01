@@ -99,6 +99,31 @@ pub fn wall_with_openings(length: f32, height: f32, openings: &[Opening]) -> Orn
     Ornament { sdf: result, smallest_feature: 0.06 }
 }
 
+fn opening_shape(opening: &Opening, inset: f32, thickness: f32) -> Sdf {
+    let width = opening.width - inset * 2.0;
+    let height = opening.height - inset * 2.0;
+    let straight = if opening.arched { height - width * 0.5 } else { height };
+    let mut shape = Sdf::round_box(v(width, straight, thickness), 0.0).translate(v(0.0, inset + straight * 0.5, 0.0));
+    if opening.arched {
+        shape = shape.union(Sdf::cylinder(width * 0.5, thickness * 0.5, 0.0).rotate_x(90.0).translate(v(0.0, inset + straight, 0.0)));
+    }
+    shape
+}
+
+pub fn window_frame(opening: &Opening) -> Ornament {
+    let bar = 0.05;
+    let outer = opening_shape(opening, 0.0, 0.1);
+    let inner = opening_shape(opening, bar, 0.2);
+    let mullion_vertical = Sdf::round_box(v(0.03, opening.height - 0.1, 0.07), 0.008).translate(v(0.0, opening.height * 0.5, 0.0));
+    let mullion_horizontal = Sdf::round_box(v(opening.width - 0.1, 0.03, 0.07), 0.008).translate(v(0.0, opening.height * 0.55, 0.0));
+    let sill = Sdf::round_box(v(opening.width + 0.14, 0.05, 0.2), 0.012).translate(v(0.0, -0.02, 0.06));
+    Ornament { sdf: outer.subtract(inner).union(mullion_vertical).union(mullion_horizontal).union(sill), smallest_feature: 0.06 }
+}
+
+pub fn window_glass(opening: &Opening) -> Ornament {
+    Ornament { sdf: opening_shape(opening, 0.03, 0.012), smallest_feature: 0.036 }
+}
+
 pub struct BuildingSpec {
     pub width: f32,
     pub depth: f32,
@@ -147,6 +172,34 @@ pub fn build_building(spec: &BuildingSpec, style: &Style) -> Result<Asset, Strin
     asset.parts.push(placed(&back, "wall_back", v(spec.width, 0.0, -spec.depth * 0.5), 180.0));
     asset.parts.push(placed(&side, "wall_left", v(-spec.width * 0.5 + WALL_THICKNESS * 0.5 + spec.width * 0.5, 0.0, spec.depth * 0.5), 90.0));
     asset.parts.push(placed(&side, "wall_right", v(spec.width, 0.0, -spec.depth * 0.5), -90.0));
+
+    let glass_material = "glass";
+    let mut window_cache: std::collections::HashMap<(u32, u32, bool), (Part, Part)> = std::collections::HashMap::new();
+    let mut openings_by_wall: Vec<(&str, Vec3, f32, f32, &[Opening])> = Vec::new();
+    openings_by_wall.push(("front", v(0.0, 0.0, spec.depth * 0.5), 0.0, spec.width, &front_openings));
+    openings_by_wall.push(("back", v(spec.width, 0.0, -spec.depth * 0.5), 180.0, spec.width, &back_openings));
+    openings_by_wall.push(("left", v(WALL_THICKNESS * 0.5, 0.0, spec.depth * 0.5), 90.0, spec.depth, &side_openings));
+    openings_by_wall.push(("right", v(spec.width, 0.0, -spec.depth * 0.5), -90.0, spec.depth, &side_openings));
+    for (wall_name, origin, yaw, _length, openings) in openings_by_wall {
+        for (index, opening) in openings.iter().enumerate() {
+            let at = Vec3::new(opening.x, opening.sill, 0.0);
+            let key = (opening.width.to_bits(), opening.height.to_bits(), opening.arched);
+            if !window_cache.contains_key(&key) {
+                let frame_part = styled("frame", &window_frame(opening), style, "timber")?;
+                let glass_part = styled("glass", &window_glass(opening), style, glass_material)?;
+                window_cache.insert(key, (frame_part, glass_part));
+            }
+            let (frame_part, glass_part) = window_cache[&key].clone();
+            for (kind, part) in [("frame", frame_part), ("glass", glass_part)] {
+                let mut copy = part.clone();
+                copy.name = format!("window_{}_{}_{}", wall_name, index, kind);
+                copy.mesh.translate(at);
+                copy.mesh.rotate_y(yaw);
+                copy.mesh.translate(origin);
+                asset.parts.push(copy);
+            }
+        }
+    }
 
     let fill = styled("gable", &gable_fill(spec.width, spec.roof_pitch_degrees), style, "plaster_wall")?;
     asset.parts.push(placed(&fill, "gable_front", v(0.0, height, spec.depth * 0.5), 0.0));

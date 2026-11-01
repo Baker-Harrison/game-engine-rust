@@ -174,3 +174,42 @@ impl Surface for PaintedPlaster {
         self.weathering.apply(painted.lerp(bare, exposed), sample)
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct Bark {
+    pub bark: Vec3,
+    pub groove: Vec3,
+    pub ridge_frequency: f32,
+    pub weathering: Weathering,
+    pub seed: u32,
+}
+
+impl Surface for Bark {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        let p = sample.position;
+        let angle = p.z.atan2(p.x);
+        let warp = fractal_noise(p.x * 3.0, p.y * 1.2, p.z * 3.0, 3, self.seed) * 0.8;
+        let ridge = ((angle * self.ridge_frequency + warp * 4.0).sin() * 0.5 + 0.5).powf(1.5);
+        let flake = value_noise(p.x * 40.0, p.y * 12.0, p.z * 40.0, self.seed + 1);
+        let base = Material::new(self.groove.lerp(self.bark, ridge) * (0.85 + 0.3 * flake), 0.95, 0.0);
+        self.weathering.apply(base, sample)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Skin {
+    pub base: Vec3,
+    pub flush: Vec3,
+    pub seed: u32,
+}
+
+impl Surface for Skin {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        let p = sample.position;
+        let mottling = fractal_noise(p.x * 14.0, p.y * 14.0, p.z * 14.0, 3, self.seed) * 0.5 + 0.5;
+        let pores = value_noise(p.x * 400.0, p.y * 400.0, p.z * 400.0, self.seed + 1);
+        let cavity = (-sample.curvature * 0.01).clamp(0.0, 1.0);
+        let tone = self.base.lerp(self.flush, (mottling * 0.35 + cavity * 0.5).clamp(0.0, 1.0));
+        Material::new(tone * (0.96 + 0.06 * pores), 0.55 + 0.1 * pores, 0.0)
+    }
+}

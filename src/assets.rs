@@ -15,6 +15,38 @@ pub struct AssetDefinition {
 pub fn definitions() -> Vec<AssetDefinition> {
     vec![
         AssetDefinition {
+            name: "human",
+            summary: "parametric adult body with head and hands, anatomical proportions",
+            parameters: &[("height", 1.78), ("build", 0.5)],
+            build: |p| {
+                use crate::model::humanoid::{BodySpec, HandPose};
+                let spec = BodySpec { build: p.get("build"), ..BodySpec::adult(p.get("height")) };
+                crate::model::character::build_human(&crate::model::style::Style::overgrown_manor(), &spec, &HandPose::open()).unwrap_or_else(|error| panic!("{}", error))
+            },
+        },
+        AssetDefinition {
+            name: "viewmodel",
+            summary: "carbine with both hands placed on its grip sockets",
+            parameters: &[("hand_length", 0.19)],
+            build: |p| crate::model::character::build_viewmodel(&crate::model::style::Style::overgrown_manor(), p.get("hand_length")).unwrap_or_else(|error| panic!("{}", error)),
+        },
+        AssetDefinition {
+            name: "hands",
+            summary: "hand pose lineup: open, fist, pistol grip, trigger finger, foregrip",
+            parameters: &[("length", 0.19)],
+            build: |p| crate::model::character::build_hand_poses(&crate::model::style::Style::overgrown_manor(), p.get("length")).unwrap_or_else(|error| panic!("{}", error)),
+        },
+        AssetDefinition {
+            name: "garden",
+            summary: "procedural oak with leaf cards and scattered grass",
+            parameters: &[("height", 7.0), ("seed", 7.0)],
+            build: |p| {
+                let mut spec = crate::model::vegetation::TreeSpec::oak(p.get("height"));
+                spec.seed = p.get("seed") as u64;
+                crate::model::garden::build_garden(&crate::model::style::Style::overgrown_manor(), &spec).unwrap_or_else(|error| panic!("{}", error))
+            },
+        },
+        AssetDefinition {
             name: "manor",
             summary: "two-storey gabled manor with arched door, reveals, eaves cornice and slate roof",
             parameters: &[("width", 9.0), ("depth", 6.0), ("storeys", 2.0), ("windows", 3.0), ("pitch", 38.0)],
