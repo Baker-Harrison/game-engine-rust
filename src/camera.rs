@@ -18,6 +18,28 @@ impl Camera {
         Camera { pos, yaw: 0.0, pitch: 0.0, fov_y: 70f32.to_radians(), near: 0.05 }
     }
 
+    pub fn look_at(pos: Vec3, target: Vec3, fov_degrees: f32) -> Camera {
+        let direction = (target - pos).normalized();
+        let mut camera = Camera::new(pos);
+        camera.pitch = direction.y.clamp(-1.0, 1.0).asin().clamp(-MAX_PITCH, MAX_PITCH);
+        camera.yaw = (-direction.x).atan2(-direction.z);
+        camera.fov_y = fov_degrees.to_radians();
+        camera
+    }
+
+    pub fn project_to_screen(&self, point: Vec3, width: usize, height: usize) -> Option<(f32, f32)> {
+        let offset = point - self.pos;
+        let depth = offset.dot(self.forward());
+        if depth < self.near {
+            return None;
+        }
+        let tan_half = (self.fov_y * 0.5).tan();
+        let aspect = width as f32 / height as f32;
+        let x = offset.dot(self.right()) / depth / (tan_half * aspect);
+        let y = offset.dot(self.up()) / depth / tan_half;
+        Some(((x * 0.5 + 0.5) * width as f32, (0.5 - y * 0.5) * height as f32))
+    }
+
     pub fn forward(&self) -> Vec3 {
         let (sy, cy) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();

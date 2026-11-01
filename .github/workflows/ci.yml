@@ -32,3 +32,10 @@ jobs:
       - name: Window smoke test (macOS and Windows)
         if: runner.os != 'Linux'
         run: cargo run --release -- run --frames 30
+      - name: Inspect assets
+        run: |
+          cargo run --release -- inspect chair --out inspect/chair
+          cargo run --release -- inspect carbine --out inspect/carbine
+          cargo run --release -- inspect house furniture_cell=0.012 --out inspect/house
+      - name: Render a scene that places an asset
+        run: cargo run --release -- render scenes/showroom.scene --out showroom.ppm

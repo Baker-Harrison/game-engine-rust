@@ -5,7 +5,15 @@ use crate::math::Vec3;
 #[derive(Clone, Copy)]
 pub struct Tri {
     pub v: [Vec3; 3],
-    pub color: Vec3,
+    pub n: [Vec3; 3],
+    pub c: [Vec3; 3],
+}
+
+impl Tri {
+    pub fn flat(v: [Vec3; 3], color: Vec3) -> Tri {
+        let normal = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
+        Tri { v, n: [normal; 3], c: [color; 3] }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -30,9 +38,35 @@ pub struct Scene {
     pub boxes: Vec<BoxEnt>,
     pub camera: Camera,
     pub tris: Vec<Tri>,
+    pub placed_meshes: Vec<crate::model::mesh::Mesh>,
 }
 
 impl Scene {
+    pub fn from_mesh(mesh: &crate::model::mesh::Mesh, sky: Vec3) -> Scene {
+        let mut scene = Scene {
+            sky,
+            fog: 1.0e6,
+            ground: None,
+            boxes: Vec::new(),
+            camera: Camera::new(Vec3::new(0.0, 1.7, 0.0)),
+            tris: Vec::new(),
+            placed_meshes: Vec::new(),
+        };
+        scene.add_mesh(mesh);
+        scene
+    }
+
+    pub fn add_mesh(&mut self, mesh: &crate::model::mesh::Mesh) {
+        for triangle in mesh.indices.chunks(3) {
+            let at = |k: usize| triangle[k] as usize;
+            self.tris.push(Tri {
+                v: [mesh.positions[at(0)], mesh.positions[at(1)], mesh.positions[at(2)]],
+                n: [mesh.normals[at(0)], mesh.normals[at(1)], mesh.normals[at(2)]],
+                c: [mesh.colors[at(0)], mesh.colors[at(1)], mesh.colors[at(2)]],
+            });
+        }
+    }
+
     pub fn parse(src: &str) -> Result<Scene, String> {
         let mut s = Scene {
             sky: Vec3::new(0.53, 0.74, 0.93),
@@ -41,6 +75,7 @@ impl Scene {
             boxes: Vec::new(),
             camera: Camera::new(Vec3::new(0.0, 1.7, 0.0)),
             tris: Vec::new(),
+            placed_meshes: Vec::new(),
         };
         for (i, raw) in src.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -81,6 +116,20 @@ impl Scene {
                     size: kv_vec3(&t, "size").ok_or_else(|| err("box needs size x y z"))?,
                     color: kv_vec3(&t, "color").unwrap_or(Vec3::new(0.7, 0.7, 0.7)),
                 }),
+                "asset" => {
+                    let name = t.get(1).ok_or_else(|| err("expected: asset NAME [pos x y z] [yaw deg] [key=value ...]"))?;
+                    let overrides = t[2..]
+                        .iter()
+                        .filter(|word| word.contains('='))
+                        .map(|word| crate::assets::parse_override(word))
+                        .collect::<Result<Vec<_>, String>>()
+                        .map_err(|e| err(&e))?;
+                    let asset = crate::assets::build(name, &overrides).map_err(|e| err(&e))?;
+                    let mut mesh = asset.baked_mesh(&["stage_floor".to_string()], &asset.default_bake_settings());
+                    mesh.rotate_y(kv_f32(&t, "yaw").unwrap_or(0.0));
+                    mesh.translate(kv_vec3(&t, "pos").unwrap_or(Vec3::ZERO));
+                    s.placed_meshes.push(mesh);
+                }
                 other => return Err(err(&format!("unknown entity '{}'", other))),
             }
         }
@@ -105,8 +154,8 @@ impl Scene {
                         Vec3::new(x1, 0.0, z1),
                         Vec3::new(x0, 0.0, z1),
                     );
-                    tris.push(Tri { v: [a, e, d], color: c });
-                    tris.push(Tri { v: [a, d, b], color: c });
+                    tris.push(Tri::flat([a, e, d], c));
+                    tris.push(Tri::flat([a, d, b], c));
                 }
             }
         }
@@ -126,11 +175,16 @@ impl Scene {
             ];
             let faces = [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]];
             for f in faces {
-                tris.push(Tri { v: [corners[f[0]], corners[f[1]], corners[f[2]]], color: b.color });
-                tris.push(Tri { v: [corners[f[0]], corners[f[2]], corners[f[3]]], color: b.color });
+                tris.push(Tri::flat([corners[f[0]], corners[f[1]], corners[f[2]]], b.color));
+                tris.push(Tri::flat([corners[f[0]], corners[f[2]], corners[f[3]]], b.color));
             }
         }
         self.tris = tris;
+        let placed = std::mem::take(&mut self.placed_meshes);
+        for mesh in &placed {
+            self.add_mesh(mesh);
+        }
+        self.placed_meshes = placed;
     }
 
     /// Moves a circle (the player) in the XZ plane out of any box it overlaps.

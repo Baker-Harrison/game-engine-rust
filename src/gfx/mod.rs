@@ -45,12 +45,12 @@ pub struct FrameUniforms {
 pub fn build_vertices(scene: &Scene) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(scene.tris.len() * 3);
     for t in &scene.tris {
-        let n = (t.v[1] - t.v[0]).cross(t.v[2] - t.v[0]).normalized();
-        for v in t.v {
+        for i in 0..3 {
+            let (v, n, c) = (t.v[i], t.n[i], t.c[i]);
             out.push(Vertex {
                 pos: [v.x, v.y, v.z, 1.0],
                 normal: [n.x, n.y, n.z, 0.0],
-                color: [t.color.x, t.color.y, t.color.z, 1.0],
+                color: [c.x, c.y, c.z, 1.0],
             });
         }
     }
