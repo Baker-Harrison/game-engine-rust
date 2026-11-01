@@ -43,14 +43,12 @@ pub struct Level {
     pub spawns: Vec<Spawn>,
     pub pickups: Vec<PickupSpot>,
     pub map_rects: Vec<MapRect>,
-    pub solid_count: usize,
 }
 
 #[derive(Clone, Copy)]
 enum Heading {
     PlusX,
     MinusX,
-    PlusZ,
     MinusZ,
 }
 
@@ -62,7 +60,6 @@ struct Builder {
     map_rects: Vec<MapRect>,
     flipped: bool,
     prop_cache: PropCache,
-    solid_count: usize,
 }
 
 struct PropCache {
@@ -113,7 +110,6 @@ impl Builder {
             map_rects: Vec::new(),
             flipped: false,
             prop_cache: PropCache::new(),
-            solid_count: 0,
         }
     }
 
@@ -134,14 +130,12 @@ impl Builder {
         let aabb = self.bounds(min, max);
         add_tessellated_box(&mut self.mesh, aabb.center(), aabb.size(), color, 1.0);
         self.collision.add(aabb);
-        self.solid_count += 1;
         self.map_rects.push(MapRect { bounds: aabb, elevated: aabb.min.y > 1.5 });
     }
 
     fn collider_only(&mut self, min: Vec3, max: Vec3) {
         let aabb = self.bounds(min, max);
         self.collision.add(aabb);
-        self.solid_count += 1;
         self.map_rects.push(MapRect { bounds: aabb, elevated: aabb.min.y > 1.5 });
     }
 
@@ -166,11 +160,10 @@ impl Builder {
             let (min, max) = match heading {
                 Heading::PlusX => (v(start.x + d0, 0.0, start.z - half), v(start.x + d1, top, start.z + half)),
                 Heading::MinusX => (v(start.x - d1, 0.0, start.z - half), v(start.x - d0, top, start.z + half)),
-                Heading::PlusZ => (v(start.x - half, 0.0, start.z + d0), v(start.x + half, top, start.z + d1)),
                 Heading::MinusZ => (v(start.x - half, 0.0, start.z - d1), v(start.x + half, top, start.z - d0)),
             };
             let shade = if i % 2 == 0 { 1.0 } else { 0.9 };
-            self.solid(min, max, STEEL * shade);
+            self.solid(min, max, color * shade);
         }
     }
 
@@ -389,8 +382,9 @@ fn build_half(b: &mut Builder) {
     b.rail(v(0.45, y, 4.55), v(0.45, y, 10.6));
     b.rail(v(2.55, y, 4.55), v(2.55, y, 10.6));
 
-    b.catwalk_x(-26.0, -4.5, -2.0, y, (true, true));
-    b.catwalk_z(-26.0, -12.0, -2.0, y, (true, true));
+    b.catwalk_x(-27.0, -4.5, -2.0, y, (false, true));
+    b.rail(v(-26.95, y, -3.0), v(-26.95, y, -1.05));
+    b.catwalk_z(-26.0, -12.0, -3.0, y, (true, true));
     b.deck(v(-29.0, y, -18.0), v(-23.0, y, -12.0));
     for (px, pz) in [(-28.5, -17.5), (-23.5, -17.5), (-28.5, -12.5), (-23.5, -12.5)] {
         b.post(px, pz, y - 0.25, 0.5);
@@ -401,7 +395,7 @@ fn build_half(b: &mut Builder) {
     b.rail(v(-29.0, y, -13.9), v(-29.0, y, -12.0));
     b.rail(v(-29.0, y, -12.0), v(-27.0, y, -12.0));
     b.rail(v(-25.0, y, -12.0), v(-23.0, y, -12.0));
-    b.stairs(v(-29.0, 0.0, -15.0), Heading::MinusX, 2.0, y, STEEL);
+    b.stairs(v(-35.3, 0.0, -15.0), Heading::PlusX, 2.0, y, STEEL);
     b.visual_only(v(-34.8, 0.0, -14.1), v(-34.7, y, -13.9), SAFETY_YELLOW);
 
     b.tank_at(-17.0, 17.0, 5.0, 7.0, true);
@@ -412,12 +406,12 @@ fn build_half(b: &mut Builder) {
     b.container_at(-6.0, -22.0, false, 1, 2);
     b.container_at(-39.0, -14.0, false, 1, 3);
     b.container_at(12.0, 14.0, true, 1, 4);
-    b.stairs(v(-25.2, 0.0, -27.0), Heading::MinusX, 1.6, 2.4, WOOD);
-    b.stairs(v(-1.0, 0.0, -19.0), Heading::PlusZ, 1.6, 2.4, WOOD);
+    b.stairs(v(-22.0, 0.0, -27.0), Heading::MinusX, 1.6, 2.6, WOOD);
+    b.stairs(v(-0.9, 0.0, -20.0), Heading::MinusX, 1.6, 2.6, WOOD);
 
     b.building(v(-6.0, 0.0, 24.0), 9.0, 7.0, 3.2, &[('n', -6.0), ('e', 24.0)], &[('w', 22.5), ('w', 25.5), ('s', -8.0), ('s', -4.0)], OFFICE_WALL);
     b.office_furniture(v(-6.0, 0.0, 24.0));
-    b.stairs(v(-10.6, 0.0, 26.0), Heading::MinusX, 1.8, 3.2, WOOD);
+    b.stairs(v(-15.8, 0.0, 26.0), Heading::PlusX, 1.8, 3.4, WOOD);
 
     b.pipe_rack(12.0, 34.0, -6.0);
     let elbow = b.prop_cache.elbow.clone();
@@ -458,14 +452,16 @@ fn build_half(b: &mut Builder) {
         b.collider_only(v(x - 0.1, 0.0, z - 0.1), v(x + 0.1, 6.0, z + 0.1));
     }
 
-    b.spawns.push(Spawn { position: v(-36.0, 0.05, -22.0), yaw: -30.0 });
-    b.spawns.push(Spawn { position: v(-34.0, 0.05, 14.0), yaw: -100.0 });
-    b.spawns.push(Spawn { position: v(-12.0, 0.05, -10.0), yaw: 20.0 });
-    b.spawns.push(Spawn { position: v(-2.0, 0.05, 29.0), yaw: 180.0 });
-    b.pickups.push(PickupSpot { kind: PickupKind::Health, position: v(-24.0, 0.0, 3.0) });
-    b.pickups.push(PickupSpot { kind: PickupKind::Ammo, position: v(-10.0, 0.0, -16.0) });
-    b.pickups.push(PickupSpot { kind: PickupKind::Health, position: v(-30.0, 0.0, 22.0) });
-    b.pickups.push(PickupSpot { kind: PickupKind::Ammo, position: v(-27.0, y, -2.0) });
+    if !b.flipped {
+        b.spawns.push(Spawn { position: v(-36.0, 0.05, -22.0), yaw: -30.0 });
+        b.spawns.push(Spawn { position: v(-34.0, 0.05, 14.0), yaw: -100.0 });
+        b.spawns.push(Spawn { position: v(-12.0, 0.05, -10.0), yaw: 20.0 });
+        b.spawns.push(Spawn { position: v(-2.0, 0.05, 29.0), yaw: 180.0 });
+        b.pickups.push(PickupSpot { kind: PickupKind::Health, position: v(-24.0, 0.0, 3.0) });
+        b.pickups.push(PickupSpot { kind: PickupKind::Ammo, position: v(-10.0, 0.0, -16.0) });
+        b.pickups.push(PickupSpot { kind: PickupKind::Health, position: v(-34.0, 0.0, 20.0) });
+        b.pickups.push(PickupSpot { kind: PickupKind::Ammo, position: v(-22.0, y, -2.0) });
+    }
 }
 
 fn build_scenery(b: &mut Builder) {
@@ -591,5 +587,38 @@ pub fn build_level(with_bake: bool) -> Level {
         let settings = BakeSettings { ao_samples: 10, ao_distance: 1.6, ao_strength: 0.8, ..BakeSettings::default() };
         bake(&mut b.mesh, &occluders, &settings);
     }
-    Level { collision: b.collision, mesh: b.mesh, spawns: b.spawns, pickups: b.pickups, map_rects: b.map_rects, solid_count: b.solid_count }
+    Level { collision: b.collision, mesh: b.mesh, spawns: b.spawns, pickups: b.pickups, map_rects: b.map_rects }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::physics::Body;
+
+    #[test]
+    fn spawns_are_clear_of_solids() {
+        let level = build_level(false);
+        for spawn in &level.spawns {
+            let body = Body::new(spawn.position, 0.3, 1.8);
+            assert!(!level.collision.overlaps_any(&body.aabb()), "spawn inside solid at {:?}", spawn.position);
+        }
+    }
+
+    #[test]
+    fn eye_positions_are_not_buried_in_the_mesh() {
+        let level = build_level(false);
+        for spawn in &level.spawns {
+            let eye = spawn.position + Vec3::new(0.0, 1.62, 0.0);
+            let mut covering = 0;
+            for t in 0..level.mesh.triangle_count() {
+                let [a, b, c] = level.mesh.triangle(t);
+                let low = a.min(b).min(c);
+                let high = a.max(b).max(c);
+                if low.x < eye.x + 0.3 && high.x > eye.x - 0.3 && low.z < eye.z + 0.3 && high.z > eye.z - 0.3 && low.y < eye.y + 0.3 && high.y > eye.y - 0.3 {
+                    covering += 1;
+                }
+            }
+            assert_eq!(covering, 0, "{} triangles surround the eye at {:?}", covering, eye);
+        }
+    }
 }

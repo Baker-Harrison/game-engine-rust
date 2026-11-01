@@ -5,7 +5,6 @@ use engine::model::sdf::Sdf;
 use engine::noise::fractal_noise;
 
 pub const SAND: Vec3 = Vec3::new(0.78, 0.64, 0.42);
-pub const SAND_DARK: Vec3 = Vec3::new(0.62, 0.50, 0.33);
 pub const CONCRETE: Vec3 = Vec3::new(0.62, 0.60, 0.56);
 pub const STEEL: Vec3 = Vec3::new(0.34, 0.37, 0.40);
 pub const STEEL_DARK: Vec3 = Vec3::new(0.18, 0.20, 0.22);
