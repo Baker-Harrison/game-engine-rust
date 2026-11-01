@@ -266,6 +266,7 @@ impl PlayerState {
 pub struct Models {
     pub bot: BotModel,
     pub viewmodels: Viewmodels,
+    pub arms: crate::viewrig::ViewArms,
     pub grenade: Mesh,
     pub health_pack: Mesh,
     pub ammo_pack: Mesh,

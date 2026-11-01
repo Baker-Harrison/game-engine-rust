@@ -121,19 +121,21 @@ impl Oilyard {
         let switching = self.ps.switch_ticks as f32 / 18.0;
         offset.y -= 0.35 * switching;
         let mut pitch = camera.pitch + self.ps.kick * 0.04;
+        let mut roll = 0.0;
+        let mut reload = None;
         if self.ps.reload_ticks > 0 {
-            let total = weapon.reload_ticks as f32;
-            let dip = (std::f32::consts::PI * (1.0 - self.ps.reload_ticks as f32 / total)).sin();
-            offset.y -= 0.12 * dip;
-            pitch -= 0.45 * dip;
+            let progress = 1.0 - self.ps.reload_ticks as f32 / weapon.reload_ticks as f32;
+            let frame = crate::viewrig::reload_frame(kind, progress);
+            offset.y -= frame.weapon_drop;
+            pitch += frame.weapon_pitch;
+            roll = frame.weapon_roll;
+            reload = Some(progress);
         }
-        let placement = Placement::at(camera.pos, camera.yaw).pitch(pitch).offset(offset);
-        let viewmodels = &self.models().viewmodels;
-        push_mesh(out, viewmodels.weapon(kind), &placement);
-        push_mesh(out, &viewmodels.right_arm, &placement);
-        if kind != WeaponKind::Sidearm {
-            push_mesh(out, &viewmodels.left_arm, &placement);
-        }
+        let body = Placement::at(camera.pos, camera.yaw).pitch(camera.pitch);
+        let placement = Placement::at(camera.pos, camera.yaw).pitch(pitch).roll(roll).offset(offset);
+        let models = self.models();
+        push_mesh(out, models.viewmodels.weapon(kind), &placement);
+        models.arms.emit(out, kind, &placement, &body, reload, kind != WeaponKind::Sidearm);
         if self.ps.flash > 0 {
             let size = (0.06 + 0.03 * (engine.time.tick % 2) as f32) * (1.0 - 0.75 * ads);
             let at = placement.point(weapon.muzzle);

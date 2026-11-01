@@ -11,6 +11,7 @@ mod pose;
 mod props;
 mod render;
 mod rig;
+mod viewrig;
 mod sfx;
 mod state;
 mod weapons;

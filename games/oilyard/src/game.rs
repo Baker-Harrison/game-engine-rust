@@ -279,6 +279,7 @@ impl Game for Oilyard {
         self.models = Some(Models {
             bot: BotModel::build(),
             viewmodels: Viewmodels::build()?,
+            arms: crate::viewrig::ViewArms::build(),
             grenade: grenade_mesh(),
             health_pack: health_pack_mesh(),
             ammo_pack: ammo_pack_mesh(),
