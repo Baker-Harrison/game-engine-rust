@@ -19,7 +19,7 @@ pub struct TraceSettings {
 
 impl Default for TraceSettings {
     fn default() -> TraceSettings {
-        TraceSettings { samples_per_pixel: 4, shadow_samples: 3, indirect_samples: 6, reflection_samples: 1, sun_angular_radius: 0.035, exposure: 1.0 }
+        TraceSettings { samples_per_pixel: 4, shadow_samples: 3, indirect_samples: 6, reflection_samples: 1, sun_angular_radius: 0.035, exposure: 0.6 }
     }
 }
 

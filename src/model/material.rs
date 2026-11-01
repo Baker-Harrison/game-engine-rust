@@ -45,12 +45,12 @@ impl<F: Fn(&SurfaceSample) -> Material + Sync> Surface for F {
 
 pub type Paint<'a> = &'a (dyn Fn(&SurfaceSample) -> Vec3 + Sync);
 
-fn smoothstep(low: f32, high: f32, value: f32) -> f32 {
+pub(super) fn smoothstep(low: f32, high: f32, value: f32) -> f32 {
     let t = ((value - low) / (high - low)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
-fn dominant_plane(position: Vec3, normal: Vec3) -> (f32, f32) {
+pub(super) fn dominant_plane(position: Vec3, normal: Vec3) -> (f32, f32) {
     let n = normal.abs();
     if n.y >= n.x && n.y >= n.z {
         (position.x, position.z)
