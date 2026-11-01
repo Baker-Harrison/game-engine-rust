@@ -140,3 +140,16 @@ fn iron_railing_is_a_see_through_silhouette() {
     let stats = MeshStats::measure(&mesh);
     assert!(stats.silhouette_convexity[2] < 0.5, "{}", stats.silhouette_convexity[2]);
 }
+
+use engine::model::building::{stairs, StairSpec, MAX_RISE};
+
+#[test]
+fn stairs_follow_rise_and_run_rules() {
+    let good = StairSpec { total_rise: 3.0, width: 1.2, run: 0.28 };
+    assert!(good.rise() <= MAX_RISE);
+    assert!(stairs(&good).is_ok());
+    let steep = StairSpec { total_rise: 3.0, width: 1.2, run: 0.15 };
+    assert!(stairs(&steep).err().unwrap().contains("run"));
+    let awkward = StairSpec { total_rise: 3.0, width: 1.2, run: 0.5 };
+    assert!(stairs(&awkward).err().unwrap().contains("comfort"));
+}

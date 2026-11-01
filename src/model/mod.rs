@@ -1,5 +1,6 @@
 pub mod arch;
 pub mod bake;
+pub mod building;
 pub mod bvh;
 pub mod detail;
 pub mod furniture;

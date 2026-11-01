@@ -1,3 +1,4 @@
+use super::lod::simplify;
 use super::mesh::Mesh;
 use super::part::{Member, Part, PartKind};
 use super::sdf::Sdf;
@@ -12,15 +13,21 @@ pub struct DetailSpec {
     pub smallest_feature: f32,
     pub cells_per_feature: f32,
     pub max_triangles: usize,
+    pub flat_simplify_factor: Option<f32>,
 }
 
 impl DetailSpec {
     pub fn new(smallest_feature: f32) -> DetailSpec {
-        DetailSpec { smallest_feature, cells_per_feature: 3.0, max_triangles: 400_000 }
+        DetailSpec { smallest_feature, cells_per_feature: 3.0, max_triangles: 400_000, flat_simplify_factor: None }
     }
 
     pub fn with_budget(mut self, max_triangles: usize) -> DetailSpec {
         self.max_triangles = max_triangles;
+        self
+    }
+
+    pub fn simplified_flat(mut self, factor: f32) -> DetailSpec {
+        self.flat_simplify_factor = Some(factor);
         self
     }
 
@@ -43,6 +50,9 @@ pub fn build_styled_part(
     }
     let surface = style.material(material)?;
     let mut mesh = mesh_sdf_surface(sdf, detail.cell(), &*surface);
+    if let Some(factor) = detail.flat_simplify_factor {
+        mesh = simplify(&mesh, detail.cell() * factor);
+    }
     mesh.generate_uvs(style.meters_per_tile);
     check_mesh(name, &mesh, style, detail.max_triangles)?;
     Ok(Part { name: name.to_string(), kind, mesh, members })
