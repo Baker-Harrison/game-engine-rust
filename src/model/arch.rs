@@ -1,3 +1,4 @@
+use super::material::{Concrete, Fabric, Plaster, Surface, WoodGrain};
 use super::furniture::{
     build_bed, build_chair, build_shelf, build_stool, build_table, BedSpec, ChairSpec, ShelfSpec, StoolSpec, TableSpec,
 };
@@ -374,6 +375,21 @@ pub fn build_house(spec: &HouseSpec) -> Asset {
         ROOF_TOP,
         ROOF_TOP,
     );
+
+    shell.apply_material_map(&|sample, color| Plaster { base: color, variation: 0.06, seed: 11 }.evaluate(sample));
+    trim.apply_material_map(&|sample, color| Plaster { base: color, variation: 0.02, seed: 12 }.evaluate(sample).with_roughness(0.45));
+    doors.apply_material_map(&|sample, color| {
+        let wood = WoodGrain { light: color * 1.2, dark: color * 0.7, grain_axis: UP, scale: 30.0, roughness: 0.5, seed: 13 };
+        wood.evaluate(sample)
+    });
+    floor.apply_material_map(&|sample, color| {
+        if color.x > color.z * 1.3 {
+            WoodGrain { light: color * 1.15, dark: color * 0.75, grain_axis: Vec3::new(1.0, 0.0, 0.0), scale: 22.0, roughness: 0.4, seed: 14 }.evaluate(sample)
+        } else {
+            Fabric { base: color, weave_frequency: 500.0, seed: 15 }.evaluate(sample)
+        }
+    });
+    roof.apply_material_map(&|sample, color| Concrete { base: color, stain: 0.2, seed: 16 }.evaluate(sample));
 
     let mut asset = Asset::new("house");
     asset.add_stage_floor(HOUSE_WIDTH * 0.5, HOUSE_DEPTH * 0.5, 14.0, 0.5, -0.02, GRASS);

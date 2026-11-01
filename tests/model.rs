@@ -218,3 +218,18 @@ fn downsampling_averages_blocks() {
     assert_eq!(small.pixels[0], 0);
     assert_eq!(small.pixels[1], 0xFFFFFF);
 }
+
+#[test]
+fn closest_hit_returns_nearest_triangle_distance_and_normal() {
+    let mut mesh = Mesh::new();
+    mesh.add_box(v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(1.0, 1.0, 1.0));
+    mesh.add_box(v(3.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(1.0, 1.0, 1.0));
+    let bvh = Bvh::from_meshes(&[&mesh]);
+    let hit = bvh.closest_hit(v(-5.0, 0.1, 0.1), v(1.0, 0.0, 0.0), 100.0).unwrap();
+    assert!((hit.distance - 4.5).abs() < 1e-3);
+    assert!((hit.normal.x + 1.0).abs() < 1e-3);
+    assert!(hit.triangle < mesh.triangle_count() / 2);
+    assert!(bvh.closest_hit(v(-5.0, 2.0, 0.0), v(1.0, 0.0, 0.0), 100.0).is_none());
+    let far = bvh.closest_hit(v(10.0, 0.1, 0.1), v(-1.0, 0.0, 0.0), 100.0).unwrap();
+    assert!((far.distance - 6.5).abs() < 1e-3);
+}
