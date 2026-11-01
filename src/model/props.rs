@@ -1,3 +1,4 @@
+use super::humanoid::{GripSocket, WeaponSockets};
 use super::paint::SurfacePaint;
 use super::part::{Asset, Dimension, Part, PartKind};
 use super::sdf::Sdf;
@@ -149,6 +150,13 @@ fn barrel_group() -> Sdf {
 
 fn revolve_slots(slot: Sdf) -> Sdf {
     slot.radial_array(6).rotate_z(-90.0).translate(v(0.499, 0.0, 0.0))
+}
+
+pub fn carbine_sockets() -> WeaponSockets {
+    WeaponSockets {
+        pistol_grip: GripSocket { position: v(-0.0215, -0.126, 0.0), rotation_degrees: [90.0, 0.0, 90.0] },
+        foregrip: GripSocket { position: v(0.34, -0.03, 0.0), rotation_degrees: [-90.0, 0.0, 0.0] },
+    }
 }
 
 pub fn build_carbine(cell: f32) -> Asset {

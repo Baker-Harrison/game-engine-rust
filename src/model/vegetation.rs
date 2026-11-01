@@ -89,14 +89,14 @@ pub fn build_tree(spec: &TreeSpec) -> Tree {
         for _ in 0..spec.leaves_per_twig {
             let offset = Vec3::new(random.range(-1.0, 1.0), random.range(-0.7, 1.0), random.range(-1.0, 1.0)) * (spec.height * 0.11);
             let center = *tip + *direction * (spec.height * 0.04) + offset;
-            add_leaf(&mut foliage, &mut random, center, spec.leaf_size, tip.y / spec.height);
+            add_leaf(&mut foliage, &mut random, center, spec.leaf_size, tip.y / spec.height, (tip.y / spec.height).clamp(0.2, 1.0));
             leaf_count += 1;
         }
     }
     Tree { wood, foliage, branch_count: branches.len(), leaf_count, smallest_feature: spec.trunk_radius * 0.62f32.powi(spec.branch_levels as i32) * 2.0 }
 }
 
-pub fn add_leaf(mesh: &mut Mesh, random: &mut Random, center: Vec3, size: f32, height_fraction: f32) {
+pub fn add_leaf(mesh: &mut Mesh, random: &mut Random, center: Vec3, size: f32, height_fraction: f32, sway: f32) {
     let yaw = random.range(0.0, std::f32::consts::TAU);
     let pitch = random.range(-0.9, 0.9);
     let along = Vec3::new(yaw.cos() * pitch.cos(), pitch.sin(), yaw.sin() * pitch.cos());
@@ -110,6 +110,7 @@ pub fn add_leaf(mesh: &mut Mesh, random: &mut Random, center: Vec3, size: f32, h
     let base = center;
     let left = center + along * (length * 0.45) - across * (width * 0.5);
     let right = center + along * (length * 0.45) + across * (width * 0.5);
+    let first_vertex = mesh.vertex_count();
     for facing in [normal, normal * -1.0] {
         let a = mesh.push_surface_vertex(base, facing, color * 0.8, [0.7, 0.0]);
         let b = mesh.push_surface_vertex(left, facing, color, [0.7, 0.0]);
@@ -122,6 +123,9 @@ pub fn add_leaf(mesh: &mut Mesh, random: &mut Random, center: Vec3, size: f32, h
             mesh.push_triangle(a, c, b);
             mesh.push_triangle(a, d, c);
         }
+    }
+    for index in first_vertex..mesh.vertex_count() {
+        mesh.sway[index] = sway;
     }
 }
 
@@ -156,6 +160,7 @@ pub fn ground_cover(spec: &GroundCoverSpec, keep_clear: &dyn Fn(f32, f32) -> boo
         let tip = mesh.push_surface_vertex(base + lean + Vec3::new(0.0, height, 0.0), normal, color * 1.2, [0.8, 0.0]);
         mesh.push_triangle(a, b, tip);
         mesh.push_triangle(a, tip, b);
+        mesh.sway[tip as usize] = 1.0;
     }
     mesh
 }

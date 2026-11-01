@@ -195,3 +195,21 @@ impl Surface for Bark {
         self.weathering.apply(base, sample)
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct Skin {
+    pub base: Vec3,
+    pub flush: Vec3,
+    pub seed: u32,
+}
+
+impl Surface for Skin {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        let p = sample.position;
+        let mottling = fractal_noise(p.x * 14.0, p.y * 14.0, p.z * 14.0, 3, self.seed) * 0.5 + 0.5;
+        let pores = value_noise(p.x * 400.0, p.y * 400.0, p.z * 400.0, self.seed + 1);
+        let cavity = (-sample.curvature * 0.01).clamp(0.0, 1.0);
+        let tone = self.base.lerp(self.flush, (mottling * 0.35 + cavity * 0.5).clamp(0.0, 1.0));
+        Material::new(tone * (0.96 + 0.06 * pores), 0.55 + 0.1 * pores, 0.0)
+    }
+}
