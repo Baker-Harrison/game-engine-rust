@@ -13,6 +13,7 @@ pub mod overlay;
 pub mod parallel;
 pub mod png;
 pub mod probe;
+pub mod layout;
 pub mod random;
 pub mod cli;
 pub mod ecs;

@@ -16,6 +16,7 @@ USAGE:
   engine asset list
   engine asset NAME [key=value ...] [--obj FILE.obj]
   engine inspect NAME [key=value ...] --out DIR
+  engine check  NAME [key=value ...]
   engine probe  NAME [key=value ...] [--json] [--out FILE]
   engine help
 
@@ -51,7 +52,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
-    if cmd == "asset" || cmd == "inspect" || cmd == "probe" {
+    if cmd == "asset" || cmd == "inspect" || cmd == "probe" || cmd == "check" {
         return asset_command(cmd, &args[1..]);
     }
     if !matches!(cmd, "run" | "render") {
@@ -151,6 +152,19 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
         i += 1;
     }
     let asset = engine::assets::build(name, &overrides)?;
+    if command == "check" {
+        let validation = engine::model::validate::validate(&asset);
+        let validation_errors: Vec<String> = validation.iter().filter(|f| f.severity == engine::model::validate::Severity::Error).map(|f| f.format()).collect();
+        let views = if asset.views.is_empty() { engine::inspect::automatic_views(&asset) } else { asset.views.clone() };
+        let scene = engine::probe::ProbeScene::from_asset(&asset, views);
+        let report = engine::probe::run(&scene, &engine::probe::targets::Targets::default());
+        for line in &validation_errors {
+            println!("{}", line);
+        }
+        println!("{}", report.text());
+        let total = validation_errors.len() + report.error_count();
+        return if total > 0 { Err(format!("{} check errors", total)) } else { println!("check passed"); Ok(()) };
+    }
     if command == "probe" {
         let views = if asset.views.is_empty() { engine::inspect::automatic_views(&asset) } else { asset.views.clone() };
         let scene = engine::probe::ProbeScene::from_asset(&asset, views);
