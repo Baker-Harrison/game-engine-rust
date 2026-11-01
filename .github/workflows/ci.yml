@@ -39,6 +39,8 @@ jobs:
           cargo run --release -- inspect house furniture_cell=0.012 --out inspect/house
       - name: Render a scene that places an asset
         run: cargo run --release -- render scenes/showroom.scene --out showroom.ppm
+      - name: Sample game layout check gate
+        run: cargo run --release -p oilyard -- check
       - name: Sample game headless simulation
         run: cargo run --release -p oilyard -- sim --ticks 900 --seed 3
       - name: Sample game frame capture
