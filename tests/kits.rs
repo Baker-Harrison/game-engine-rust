@@ -285,3 +285,34 @@ fn leaf_texture_has_cutout_alpha_and_glass_is_translucent() {
     assert!(glass.packed.get(3, 3)[0] < 30);
     assert!(style.bake_material_maps("stone_wall", 16).unwrap().albedo.texels.iter().all(|t| t[3] == 255));
 }
+
+use engine::model::character::build_human_rigged;
+use engine::model::industrial::{build_prop, prop_names};
+
+#[test]
+fn rigged_human_has_named_limb_parts_and_joint_pivots() {
+    let style = Style::overgrown_manor();
+    let human = build_human_rigged(&style, &BodySpec::adult(1.78), &HandPose::open()).unwrap();
+    for name in ["torso", "pelvis", "neck", "head", "upper_arm_l", "upper_arm_r", "forearm_l", "forearm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r", "foot_l", "foot_r"] {
+        assert!(human.asset.parts.iter().any(|p| p.name == name), "missing part {}", name);
+    }
+    for joint in ["shoulder_l", "elbow_r", "wrist_l", "hip_r", "knee_l", "ankle_r", "spine", "neck", "head"] {
+        assert!(human.joints.contains_key(joint), "missing joint {}", joint);
+    }
+    let left = human.joints["elbow_l"];
+    let right = human.joints["elbow_r"];
+    assert!((left.x + right.x).abs() < 1e-4);
+}
+
+#[test]
+fn small_props_report_footprint_and_top_height() {
+    let style = engine::model::style::Style::desert_industrial();
+    let cases = [("jersey_barrier", 3.0, 0.8), ("crate", 1.2, 1.2), ("sandbag_wall", 2.0, 0.95), ("pipe_rack", 4.4, 3.1)];
+    for (name, length, top) in cases {
+        let prop = build_prop(name, &style).unwrap();
+        assert!((prop.footprint_half.0 * 2.0 - length).abs() < 0.35, "{} {}", name, prop.footprint_half.0 * 2.0);
+        assert!((prop.top_height - top).abs() < 0.2, "{} top {}", name, prop.top_height);
+    }
+    assert!(build_prop("granite_tower", &style).is_err());
+    assert!(prop_names().len() >= 18);
+}

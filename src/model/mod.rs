@@ -7,6 +7,7 @@ pub mod detail;
 pub mod furniture;
 pub mod garden;
 pub mod humanoid;
+pub mod industrial;
 pub mod instancing;
 pub mod lod;
 pub mod material;

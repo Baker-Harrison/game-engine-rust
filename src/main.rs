@@ -52,6 +52,9 @@ fn real_main(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
+    if cmd == "props" {
+        return props_command();
+    }
     if cmd == "textures" {
         return textures_command(&args[1..]);
     }
@@ -141,6 +144,25 @@ fn real_main(args: &[String]) -> Result<(), String> {
     }
 }
 
+fn props_command() -> Result<(), String> {
+    let style = engine::model::style::Style::desert_industrial();
+    for name in engine::model::industrial::prop_names() {
+        let started = std::time::Instant::now();
+        let prop = engine::model::industrial::build_prop(name, &style)?;
+        let triangles: usize = prop.asset.parts.iter().map(|p| p.mesh.triangle_count()).sum();
+        println!(
+            "{:<18} {:>6.2}s {:>8} tris  footprint {:.2} x {:.2} m  top {:.2} m",
+            name,
+            started.elapsed().as_secs_f32(),
+            triangles,
+            prop.footprint_half.0 * 2.0,
+            prop.footprint_half.1 * 2.0,
+            prop.top_height
+        );
+    }
+    Ok(())
+}
+
 fn textures_command(rest: &[String]) -> Result<(), String> {
     let mut out: Option<&str> = None;
     let mut size = 256usize;
@@ -191,6 +213,7 @@ fn write_framebuffer(fb: &engine::render::Framebuffer, path: &str) -> Result<(),
 
 fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
     if command == "asset" && rest.first().map(String::as_str) == Some("list") {
+        println!("props (desert_industrial style): {}", engine::model::industrial::prop_names().join(" "));
         for definition in engine::assets::definitions() {
             println!("{}  {}", definition.name, definition.summary);
             let parameters: Vec<String> = definition.parameters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
