@@ -16,6 +16,7 @@ USAGE:
   engine asset list
   engine asset NAME [key=value ...] [--obj FILE.obj]
   engine inspect NAME [key=value ...] --out DIR
+  engine probe  NAME [key=value ...] [--json] [--out FILE]
   engine help
 
 `run` opens a window: WASD move, mouse look, Shift sprint, Tab toggles mouse
@@ -50,7 +51,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
-    if cmd == "asset" || cmd == "inspect" {
+    if cmd == "asset" || cmd == "inspect" || cmd == "probe" {
         return asset_command(cmd, &args[1..]);
     }
     if !matches!(cmd, "run" | "render") {
@@ -132,6 +133,7 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
     let mut overrides = Vec::new();
     let mut out: Option<&str> = None;
     let mut obj: Option<&str> = None;
+    let mut json = false;
     let mut i = 1;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -139,6 +141,7 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
                 i += 1;
                 out = Some(rest.get(i).ok_or("--out needs a value")?);
             }
+            "--json" => json = true,
             "--obj" => {
                 i += 1;
                 obj = Some(rest.get(i).ok_or("--obj needs a value")?);
@@ -148,6 +151,17 @@ fn asset_command(command: &str, rest: &[String]) -> Result<(), String> {
         i += 1;
     }
     let asset = engine::assets::build(name, &overrides)?;
+    if command == "probe" {
+        let views = if asset.views.is_empty() { engine::inspect::automatic_views(&asset) } else { asset.views.clone() };
+        let scene = engine::probe::ProbeScene::from_asset(&asset, views);
+        let report = engine::probe::run(&scene, &engine::probe::targets::Targets::default());
+        let text = if json { report.json() } else { report.text() };
+        match out {
+            Some(path) => std::fs::write(path, &text).map_err(|e| format!("{}: {}", path, e))?,
+            None => println!("{}", text),
+        }
+        return if report.error_count() > 0 { Err(format!("{} probe errors", report.error_count())) } else { Ok(()) };
+    }
     if command == "inspect" {
         let out = out.ok_or("inspect needs --out DIR")?;
         let result = engine::inspect::inspect(&asset, out)?;
