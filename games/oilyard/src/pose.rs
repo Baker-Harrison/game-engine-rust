@@ -70,6 +70,8 @@ pub fn push_mesh(out: &mut Vec<Tri>, mesh: &Mesh, placement: &Placement) {
                 mesh.colors[at(2)].mul_elements(placement.tint),
             ],
             s: [mesh.surfaces[at(0)], mesh.surfaces[at(1)], mesh.surfaces[at(2)]],
+            t: [[0.0; 2]; 3],
+            material: 0,
             unlit: false,
         });
     }

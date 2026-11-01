@@ -1,7 +1,7 @@
 
 use crate::camera::Camera;
 use crate::math::{clamp, Vec3};
-use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene};
+use crate::scene::{OverlayItem, OverlayRect, OverlayTri, Scene, SurfaceMaps};
 use std::io::Write;
 
 #[derive(Clone)]
@@ -68,6 +68,7 @@ struct ScreenVertex {
     inv_z: f32,
     normal_over_z: Vec3,
     color_over_z: Vec3,
+    uv_over_z: [f32; 2],
 }
 
 #[derive(Clone, Copy)]
@@ -75,6 +76,20 @@ struct ViewVertex {
     position: Vec3,
     normal: Vec3,
     color: Vec3,
+    uv: [f32; 2],
+}
+
+struct TexturedSurface<'a> {
+    maps: &'a SurfaceMaps,
+    tangent: Vec3,
+    bitangent: Vec3,
+}
+
+struct PixelLayout {
+    tan_half: f32,
+    aspect: f32,
+    width: f32,
+    height: f32,
 }
 
 impl ViewVertex {
@@ -83,6 +98,7 @@ impl ViewVertex {
             position: self.position.lerp(other.position, t),
             normal: self.normal.lerp(other.normal, t),
             color: self.color.lerp(other.color, t),
+            uv: [self.uv[0] + (other.uv[0] - self.uv[0]) * t, self.uv[1] + (other.uv[1] - self.uv[1]) * t],
         }
     }
 }
@@ -108,8 +124,10 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
             inv_z,
             normal_over_z: v.normal * inv_z,
             color_over_z: v.color * inv_z,
+            uv_over_z: [v.uv[0] * inv_z, v.uv[1] * inv_z],
         }
     };
+    let layout = PixelLayout { tan_half, aspect, width, height };
 
     for tri in scene.tris.iter().chain(scene.dynamic.iter()) {
         let [a, b, c] = tri.v;
@@ -124,7 +142,27 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
                 tri.n[i].dot(forward),
             ) * normal_sign,
             color: tri.c[i],
+            uv: tri.t[i],
         });
+
+        let textured = if tri.material > 0 && !tri.unlit {
+            scene.materials.get(tri.material as usize - 1).and_then(|maps| {
+                let edge1 = corners[1].position - corners[0].position;
+                let edge2 = corners[2].position - corners[0].position;
+                let (du1, dv1) = (tri.t[1][0] - tri.t[0][0], tri.t[1][1] - tri.t[0][1]);
+                let (du2, dv2) = (tri.t[2][0] - tri.t[0][0], tri.t[2][1] - tri.t[0][1]);
+                let determinant = du1 * dv2 - du2 * dv1;
+                if determinant.abs() < 1e-12 {
+                    return None;
+                }
+                let scale = 1.0 / determinant;
+                let tangent = (edge1 * dv2 - edge2 * dv1) * scale;
+                let bitangent = (edge2 * du1 - edge1 * du2) * scale;
+                Some(TexturedSurface { maps, tangent: tangent.normalized(), bitangent: bitangent.normalized() })
+            })
+        } else {
+            None
+        };
 
         let mut polygon = [corners[0]; 4];
         let mut count = 0;
@@ -146,7 +184,7 @@ pub fn render(scene: &Scene, cam: &Camera, fb: &mut Framebuffer) {
         }
         let first = project(polygon[0]);
         for i in 1..count - 1 {
-            raster(fb, first, project(polygon[i]), project(polygon[i + 1]), view_sun(right, up, forward), scene.sky, scene.fog, tri.unlit);
+            raster(fb, first, project(polygon[i]), project(polygon[i + 1]), view_sun(right, up, forward), scene.sky, scene.fog, tri.unlit, textured.as_ref(), &layout);
         }
     }
     draw_overlay(fb, &scene.overlay);
@@ -223,7 +261,7 @@ fn view_sun(right: Vec3, up: Vec3, forward: Vec3) -> Vec3 {
     Vec3::new(sun.dot(right), sun.dot(up), sun.dot(forward))
 }
 
-fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVertex, sun: Vec3, sky: Vec3, fog: f32, unlit: bool) {
+fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVertex, sun: Vec3, sky: Vec3, fog: f32, unlit: bool, textured: Option<&TexturedSurface>, layout: &PixelLayout) {
     let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if area.abs() < 1e-8 {
         return;
@@ -252,12 +290,64 @@ fn raster(fb: &mut Framebuffer, a: ScreenVertex, b: ScreenVertex, c: ScreenVerte
                 continue;
             }
             fb.depth[idx] = inv_z;
-            let normal = (a.normal_over_z * w0 + b.normal_over_z * w1 + c.normal_over_z * w2) / inv_z;
-            let base = (a.color_over_z * w0 + b.color_over_z * w1 + c.color_over_z * w2) / inv_z;
-            let shade = if unlit { 1.0 } else { AMBIENT + (1.0 - AMBIENT) * normal.normalized().dot(sun).max(0.0) };
+            let mut normal = (a.normal_over_z * w0 + b.normal_over_z * w1 + c.normal_over_z * w2) / inv_z;
+            let mut base = (a.color_over_z * w0 + b.color_over_z * w1 + c.color_over_z * w2) / inv_z;
+            let mut roughness = 0.85;
+            let mut metallic = 0.0;
+            let mut occlusion = 1.0;
+            if let Some(surface) = textured {
+                let uv_at = |sx: f32, sy: f32| {
+                    let v0 = ((b.x - sx) * (c.y - sy) - (b.y - sy) * (c.x - sx)) * inv_area;
+                    let v1 = ((c.x - sx) * (a.y - sy) - (c.y - sy) * (a.x - sx)) * inv_area;
+                    let v2 = 1.0 - v0 - v1;
+                    let z = v0 * a.inv_z + v1 * b.inv_z + v2 * c.inv_z;
+                    [
+                        (v0 * a.uv_over_z[0] + v1 * b.uv_over_z[0] + v2 * c.uv_over_z[0]) / z,
+                        (v0 * a.uv_over_z[1] + v1 * b.uv_over_z[1] + v2 * c.uv_over_z[1]) / z,
+                    ]
+                };
+                let here = uv_at(px, py);
+                let right_uv = uv_at(px + 1.0, py);
+                let down_uv = uv_at(px, py + 1.0);
+                let (tw, th) = surface.maps.albedo.base_size();
+                let span = |other: [f32; 2]| ((other[0] - here[0]) * tw as f32).hypot((other[1] - here[1]) * th as f32);
+                let lod = span(right_uv).max(span(down_uv)).max(1e-6).log2();
+                let albedo = surface.maps.albedo.sample(here[0], here[1], lod);
+                let packed = surface.maps.packed.sample(here[0], here[1], lod);
+                let texel_normal = surface.maps.normal.sample(here[0], here[1], lod);
+                let (nx, ny, nz) = (texel_normal[0] * 2.0 - 1.0, texel_normal[1] * 2.0 - 1.0, texel_normal[2] * 2.0 - 1.0);
+                let geometric = normal.normalized();
+                let perturbed = surface.tangent * nx + surface.bitangent * ny + geometric * nz;
+                normal = if perturbed.length() > 1e-6 { perturbed.normalized() } else { geometric };
+                base = Vec3::new(albedo[0], albedo[1], albedo[2]);
+                roughness = packed[0].max(0.04);
+                metallic = packed[1];
+                occlusion = packed[2];
+            }
+            let shade = if unlit {
+                1.0
+            } else {
+                AMBIENT * occlusion + (1.0 - AMBIENT) * normal.normalized().dot(sun).max(0.0)
+            };
+            let mut lit = base * shade;
+            if textured.is_some() {
+                let ray = Vec3::new(
+                    ((px / layout.width) - 0.5) * 2.0 * layout.tan_half * layout.aspect,
+                    (0.5 - py / layout.height) * 2.0 * layout.tan_half,
+                    1.0,
+                );
+                let view = ray.normalized() * -1.0;
+                let half = (sun + view).normalized();
+                let sharpness = 2.0 / (roughness * roughness * roughness * roughness).max(0.0004) - 2.0;
+                let highlight = normal.normalized().dot(half).max(0.0).powf(sharpness.min(2000.0));
+                let facing = normal.normalized().dot(sun).max(0.0);
+                let strength = highlight * facing * (1.0 - roughness) * 0.6;
+                let tint = Vec3::new(1.0, 1.0, 1.0).lerp(base, metallic);
+                lit = base * (1.0 - metallic * 0.8) * shade + tint * strength;
+            }
             let t = clamp(1.0 / inv_z / fog, 0.0, 1.0);
             let t = t * t;
-            fb.pixels[idx] = pack((base * shade).lerp(sky, t));
+            fb.pixels[idx] = pack(lit.lerp(sky, t));
         }
     }
 }

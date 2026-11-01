@@ -7,6 +7,7 @@ pub mod platform;
 pub mod render;
 pub mod trace;
 pub mod scene;
+pub mod mips;
 pub mod texture;
 pub mod assets;
 pub mod inspect;
