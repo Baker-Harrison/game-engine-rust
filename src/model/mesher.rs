@@ -1,4 +1,5 @@
-use super::mesh::Mesh;
+use super::material::{Material, Paint, Surface, SurfaceSample};
+use super::mesh::{Mesh, DEFAULT_SURFACE};
 use super::sdf::Sdf;
 use crate::math::Vec3;
 use crate::parallel::for_each_chunk;
@@ -29,19 +30,23 @@ impl Grid {
     }
 }
 
-pub struct SurfaceSample {
-    pub position: Vec3,
-    pub normal: Vec3,
-    pub curvature: f32,
-}
-
-pub type Paint<'a> = &'a (dyn Fn(&SurfaceSample) -> Vec3 + Sync);
-
 pub fn mesh_sdf(sdf: &Sdf, cell: f32, color: Vec3) -> Mesh {
     mesh_sdf_painted(sdf, cell, &|_| color)
 }
 
 pub fn mesh_sdf_painted(sdf: &Sdf, cell: f32, paint: Paint) -> Mesh {
+    mesh_sdf_surface(sdf, cell, &ColorOnly(paint))
+}
+
+struct ColorOnly<'a>(Paint<'a>);
+
+impl Surface for ColorOnly<'_> {
+    fn evaluate(&self, sample: &SurfaceSample) -> Material {
+        Material { albedo: (self.0)(sample), roughness: DEFAULT_SURFACE[0], metallic: DEFAULT_SURFACE[1] }
+    }
+}
+
+pub fn mesh_sdf_surface(sdf: &Sdf, cell: f32, surface: &dyn Surface) -> Mesh {
     let (low, high) = sdf.bounds();
     if high.x <= low.x || high.y <= low.y || high.z <= low.z {
         return Mesh::new();
@@ -54,11 +59,11 @@ pub fn mesh_sdf_painted(sdf: &Sdf, cell: f32, paint: Paint) -> Mesh {
 
     let field = sample_field(sdf, &grid);
     let (cell_vertices, vertex_cells) = place_vertices(&grid, &field);
-    let refined = refine_vertices(sdf, &grid, &vertex_cells, paint);
+    let refined = refine_vertices(sdf, &grid, &vertex_cells, surface);
 
     let mut mesh = Mesh::new();
-    for (position, normal, color) in &refined {
-        mesh.push_vertex(*position, *normal, *color);
+    for (position, normal, material) in &refined {
+        mesh.push_surface_vertex(*position, *normal, material.albedo, [material.roughness, material.metallic]);
     }
     emit_quads(&grid, &field, &cell_vertices, &mut mesh);
     mesh
@@ -147,17 +152,18 @@ fn place_vertices(grid: &Grid, field: &[f32]) -> (Vec<u32>, Vec<Vec3>) {
     (cell_vertices, vertex_cells)
 }
 
-fn refine_vertices(sdf: &Sdf, grid: &Grid, positions: &[Vec3], paint: Paint) -> Vec<(Vec3, Vec3, Vec3)> {
-    let mut refined: Vec<(Vec3, Vec3, Vec3)> = positions.iter().map(|p| (*p, Vec3::ZERO, Vec3::ZERO)).collect();
+fn refine_vertices(sdf: &Sdf, grid: &Grid, positions: &[Vec3], surface: &dyn Surface) -> Vec<(Vec3, Vec3, Material)> {
+    let blank = Material { albedo: Vec3::ZERO, roughness: 0.8, metallic: 0.0 };
+    let mut refined: Vec<(Vec3, Vec3, Material)> = positions.iter().map(|p| (*p, Vec3::ZERO, blank)).collect();
     let step = grid.cell * 0.5;
     for_each_chunk(&mut refined, 1, |_, chunk| {
-        for (position, normal, color) in chunk.iter_mut() {
+        for (position, normal, material) in chunk.iter_mut() {
             let distance = sdf.distance(*position).clamp(-grid.cell, grid.cell);
             let first_normal = sdf.gradient(*position, step);
             *position = *position - first_normal * distance;
             *normal = sdf.gradient(*position, step);
             let sample = SurfaceSample { position: *position, normal: *normal, curvature: curvature_at(sdf, *position, grid.cell) };
-            *color = paint(&sample);
+            *material = surface.evaluate(&sample);
         }
     });
     refined

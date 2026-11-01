@@ -7,6 +7,7 @@ use crate::overlay::{blit, draw_line, draw_rect, draw_text};
 use crate::png;
 use crate::render::{render, Framebuffer};
 use crate::scene::Scene;
+use crate::trace::{self, TraceSettings};
 use std::fmt::Write;
 
 const VIEW_WIDTH: usize = 480;
@@ -19,17 +20,27 @@ const LONG_LENS_DISTANCE: f32 = 400.0;
 const TEXT_COLOR: u32 = 0xF0F0F0;
 const GUIDE_COLOR: u32 = 0xFF5A36;
 
+#[derive(Clone, Copy)]
+pub enum Quality {
+    Baked,
+    Reference { samples_per_pixel: usize },
+}
+
 pub struct InspectionResult {
     pub report: String,
     pub files: Vec<String>,
 }
 
-pub fn inspect(asset: &Asset, output_directory: &str) -> Result<InspectionResult, String> {
+pub fn inspect(asset: &Asset, output_directory: &str, quality: Quality) -> Result<InspectionResult, String> {
     std::fs::create_dir_all(output_directory).map_err(|e| format!("{}: {}", output_directory, e))?;
     let settings = asset.default_bake_settings();
-    let full_mesh = asset.baked_mesh(&[], &settings);
+    let build_mesh = |excluded: &[String]| match quality {
+        Quality::Baked => asset.baked_mesh(excluded, &settings),
+        Quality::Reference { .. } => asset.merged_mesh(excluded),
+    };
+    let full_mesh = build_mesh(&[]);
     let has_roof = !asset.roof_part_names.is_empty();
-    let open_mesh = if has_roof { asset.baked_mesh(&asset.roof_part_names, &settings) } else { full_mesh.clone() };
+    let open_mesh = if has_roof { build_mesh(&asset.roof_part_names) } else { full_mesh.clone() };
     let sky = if has_roof { OUTDOOR_SKY } else { STUDIO_SKY };
     let full_scene = Scene::from_mesh(&full_mesh, sky);
     let open_scene = Scene::from_mesh(&open_mesh, sky);
@@ -41,7 +52,7 @@ pub fn inspect(asset: &Asset, output_directory: &str) -> Result<InspectionResult
     let mut sheet = Framebuffer::new(VIEW_WIDTH * SHEET_COLUMNS, VIEW_HEIGHT * rows);
     for (index, view) in views.iter().enumerate() {
         let scene = if view.name == "dollhouse" || view.name == "plan" { &open_scene } else { &full_scene };
-        let mut frame = render_supersampled(scene, &view.camera, VIEW_WIDTH, VIEW_HEIGHT);
+        let mut frame = render_view(scene, &view.camera, VIEW_WIDTH, VIEW_HEIGHT, quality);
         draw_text(&mut frame, 8, 8, &view.name, TEXT_COLOR, 2);
         blit(&mut sheet, &frame, (index % SHEET_COLUMNS) * VIEW_WIDTH, (index / SHEET_COLUMNS) * VIEW_HEIGHT);
     }
@@ -51,13 +62,13 @@ pub fn inspect(asset: &Asset, output_directory: &str) -> Result<InspectionResult
 
     let hero = &views[0];
     let hero_scene = if hero.name == "dollhouse" { &open_scene } else { &full_scene };
-    let hero_frame = render_supersampled(hero_scene, &hero.camera, VIEW_WIDTH * 2, VIEW_HEIGHT * 2);
+    let hero_frame = render_view(hero_scene, &hero.camera, VIEW_WIDTH * 2, VIEW_HEIGHT * 2, quality);
     let hero_path = format!("{}/hero.png", output_directory);
     png::write(&hero_frame, &hero_path)?;
     files.push(hero_path);
 
     let (low, high) = asset.object_bounds();
-    let dimension_sheet = dimension_views(&open_scene, low, high);
+    let dimension_sheet = dimension_views(&open_scene, low, high, quality);
     let dimension_path = format!("{}/dimensions.png", output_directory);
     png::write(&dimension_sheet, &dimension_path)?;
     files.push(dimension_path);
@@ -67,6 +78,15 @@ pub fn inspect(asset: &Asset, output_directory: &str) -> Result<InspectionResult
     std::fs::write(&report_path, &report).map_err(|e| format!("{}: {}", report_path, e))?;
     files.push(report_path);
     Ok(InspectionResult { report, files })
+}
+
+fn render_view(scene: &Scene, camera: &Camera, width: usize, height: usize, quality: Quality) -> Framebuffer {
+    match quality {
+        Quality::Baked => render_supersampled(scene, camera, width, height),
+        Quality::Reference { samples_per_pixel } => {
+            trace::render(scene, camera, width, height, TraceSettings { samples_per_pixel, ..TraceSettings::default() })
+        }
+    }
 }
 
 fn render_supersampled(scene: &Scene, camera: &Camera, width: usize, height: usize) -> Framebuffer {
@@ -97,7 +117,7 @@ pub fn automatic_views(asset: &Asset) -> Vec<View> {
     ]
 }
 
-fn dimension_views(scene: &Scene, low: Vec3, high: Vec3) -> Framebuffer {
+fn dimension_views(scene: &Scene, low: Vec3, high: Vec3, quality: Quality) -> Framebuffer {
     let size = high - low;
     let center = (low + high) * 0.5;
     let specs = [
@@ -118,7 +138,7 @@ fn dimension_views(scene: &Scene, low: Vec3, high: Vec3) -> Framebuffer {
             camera.yaw = 0.0;
         }
         camera.near = 1.0;
-        let mut frame = render_supersampled(scene, &camera, VIEW_WIDTH, VIEW_HEIGHT);
+        let mut frame = render_view(scene, &camera, VIEW_WIDTH, VIEW_HEIGHT, quality);
         annotate_extents(&mut frame, &camera, center, *name, size);
         let width_label = format!("{} {:.3} m", horizontal_label, horizontal_value);
         let height_label = format!("{} {:.3} m", vertical_label, vertical_value);
