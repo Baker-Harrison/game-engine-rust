@@ -95,7 +95,7 @@ fn render_supersampled(scene: &Scene, camera: &Camera, width: usize, height: usi
     large.downsampled(SUPERSAMPLE)
 }
 
-fn automatic_views(asset: &Asset) -> Vec<View> {
+pub fn automatic_views(asset: &Asset) -> Vec<View> {
     let (low, high) = asset.object_bounds();
     let center = (low + high) * 0.5;
     let size = high - low;
