@@ -1,7 +1,8 @@
 use super::bake::{bake, BakeSettings};
 use super::bvh::Bvh;
 use super::mesh::Mesh;
-use super::mesher::{mesh_sdf, mesh_sdf_painted};
+use super::material::Surface;
+use super::mesher::{mesh_sdf, mesh_sdf_surface};
 use super::paint::SurfacePaint;
 use super::sdf::Sdf;
 use crate::camera::Camera;
@@ -44,7 +45,11 @@ impl Part {
     }
 
     pub fn from_sdf_painted(name: &str, kind: PartKind, sdf: &Sdf, cell: f32, paint: SurfacePaint, members: Vec<Member>) -> Part {
-        Part { name: name.to_string(), kind, mesh: mesh_sdf_painted(sdf, cell, &|sample| paint.color_at(sample)), members }
+        Part { name: name.to_string(), kind, mesh: mesh_sdf_surface(sdf, cell, &paint), members }
+    }
+
+    pub fn from_sdf_surface(name: &str, kind: PartKind, sdf: &Sdf, cell: f32, surface: &dyn Surface, members: Vec<Member>) -> Part {
+        Part { name: name.to_string(), kind, mesh: mesh_sdf_surface(sdf, cell, surface), members }
     }
 
     pub fn from_mesh(name: &str, kind: PartKind, mesh: Mesh) -> Part {
