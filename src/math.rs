@@ -98,12 +98,10 @@ pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
     v.max(lo).min(hi)
 }
 
-/// Column-major 4x4 matrix (the layout Metal, Vulkan and D3D all accept).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mat4(pub [f32; 16]);
 
 impl Mat4 {
-    /// Transforms a point and returns clip space (x, y, z, w).
     pub fn mul_point(&self, p: Vec3) -> [f32; 4] {
         let m = &self.0;
         let mut o = [0.0; 4];

@@ -1,4 +1,3 @@
-use engine::app;
 use engine::math::Vec3;
 use engine::gfx;
 use engine::scene::Scene;
@@ -12,6 +11,8 @@ USAGE:
   engine run    [SCENE] [--width N] [--height N] [--renderer auto|cpu|metal|vulkan] [--frames N]
   engine render [SCENE] --out FILE.ppm [--width N] [--height N]
                 [--pos X,Y,Z] [--yaw DEG] [--pitch DEG] [--renderer cpu|metal]
+  engine new NAME
+  engine package NAME
   engine asset list
   engine asset NAME [key=value ...] [--obj FILE.obj]
   engine inspect NAME [key=value ...] --out DIR
@@ -34,6 +35,19 @@ fn real_main(args: &[String]) -> Result<(), String> {
     let cmd = args.first().map(String::as_str).unwrap_or("run");
     if matches!(cmd, "help" | "--help" | "-h") {
         println!("{}", HELP);
+        return Ok(());
+    }
+    if cmd == "new" || cmd == "package" {
+        let name = args.get(1).ok_or_else(|| format!("{} needs a game name", cmd))?;
+        let root = std::env::current_dir().map_err(|e| e.to_string())?;
+        if cmd == "new" {
+            for file in engine::tools::new_game(&root, name)? {
+                println!("wrote {}", file);
+            }
+            println!("run it with: cargo run --release -p {} -- play", name);
+        } else {
+            println!("{}", engine::tools::package_game(&root, name)?);
+        }
         return Ok(());
     }
     if cmd == "asset" || cmd == "inspect" {
@@ -99,7 +113,9 @@ fn real_main(args: &[String]) -> Result<(), String> {
         println!("wrote {} ({}x{})", out, width, height);
         Ok(())
     } else {
-        app::run(scene, width, height, renderer, max_frames)
+        let mut viewer = engine::viewer::SceneViewer::new("engine", scene);
+        let options = engine::runner::RunOptions { width, height, renderer: renderer.to_string(), max_frames, audio: false, seed: 1 };
+        engine::runner::run(&mut viewer, &options)
     }
 }
 

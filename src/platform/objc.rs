@@ -1,4 +1,3 @@
-//! Minimal Objective-C runtime bindings shared by the macOS window and Metal backends.
 
 use std::ffi::{c_char, c_void, CString};
 
@@ -9,8 +8,6 @@ pub type Sel = *mut c_void;
 extern "C" {
     pub fn objc_getClass(name: *const c_char) -> Id;
     pub fn sel_registerName(name: *const c_char) -> Sel;
-    // Declared without arguments on purpose: it is transmuted to the exact
-    // signature of each call (the variadic ABI differs on Apple arm64).
     pub fn objc_msgSend();
     pub fn objc_autoreleasePoolPush() -> *mut c_void;
     pub fn objc_autoreleasePoolPop(pool: *mut c_void);
@@ -32,8 +29,6 @@ pub unsafe fn class(name: &str) -> Id {
     objc_getClass(c.as_ptr())
 }
 
-/// `send!(RetType; receiver, "selector:", ArgType = arg, ...)` calls objc_msgSend
-/// with exactly that signature.
 macro_rules! send {
     ($ret:ty; $recv:expr, $sel:expr $(, $argt:ty = $arg:expr)* $(,)?) => {{
         let f: unsafe extern "C" fn($crate::platform::objc::Id, $crate::platform::objc::Sel $(, $argt)*) -> $ret =
@@ -48,7 +43,6 @@ pub unsafe fn nsstring(s: &str) -> Id {
     send!(Id; class("NSString"), "stringWithUTF8String:", *const c_char = c.as_ptr())
 }
 
-/// Text of an NSError, for messages.
 pub unsafe fn error_text(err: Id) -> String {
     if err.is_null() {
         return "unknown error".into();

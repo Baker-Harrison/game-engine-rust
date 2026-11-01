@@ -1,9 +1,4 @@
-//! Engine-owned renderer interface. Game code only talks to `Renderer`;
-//! each backend (CPU, Metal, Vulkan, D3D12) implements it.
-//!
-//! Every backend draws the same thing from the same data: a flat-shaded
-//! triangle list with a directional sun, depth testing and distance fog. The
-//! CPU renderer is the reference the GPU backends are compared against.
+
 
 pub mod cpu;
 #[cfg(target_os = "macos")]
@@ -14,12 +9,9 @@ pub mod vulkan;
 use crate::camera::Camera;
 use crate::platform::Window;
 use crate::render::Framebuffer;
-use crate::scene::Scene;
+use crate::scene::{OverlayRect, Scene, Tri};
 
 pub const FAR_PLANE: f32 = 500.0;
-
-/// One vertex. Everything is vec4-sized so the same layout works in MSL,
-/// GLSL and HLSL without padding surprises (48 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Vertex {
@@ -27,33 +19,59 @@ pub struct Vertex {
     pub normal: [f32; 4],
     pub color: [f32; 4],
 }
-
-/// Per-frame constants shared by all GPU shaders (128 bytes, vec4 aligned).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameUniforms {
     pub view_proj: [f32; 16],
     pub eye: [f32; 4],
     pub sky: [f32; 4],
-    /// xyz = direction towards the sun, w = ambient.
     pub sun: [f32; 4],
-    /// x = fog distance.
     pub params: [f32; 4],
 }
 
-/// Flattens the scene into a vertex list (3 vertices per triangle).
+pub const KIND_LIT: f32 = 0.0;
+pub const KIND_UNLIT: f32 = 1.0;
+pub const KIND_SCREEN: f32 = 2.0;
+pub const MAX_DYNAMIC_VERTICES: usize = 240_000;
+
+fn push_triangle(out: &mut Vec<Vertex>, triangle: &Tri) {
+    let kind = if triangle.unlit { KIND_UNLIT } else { KIND_LIT };
+    for i in 0..3 {
+        let (v, n, c) = (triangle.v[i], triangle.n[i], triangle.c[i]);
+        out.push(Vertex { pos: [v.x, v.y, v.z, 1.0], normal: [n.x, n.y, n.z, kind], color: [c.x, c.y, c.z, 1.0] });
+    }
+}
+
+fn push_overlay_rect(out: &mut Vec<Vertex>, rect: &OverlayRect, depth: f32) {
+    let to_clip = |x: f32, y: f32| [x * 2.0 - 1.0, 1.0 - y * 2.0, depth, 1.0];
+    let corner = |x: f32, y: f32| Vertex {
+        pos: to_clip(x, y),
+        normal: [0.0, 0.0, 1.0, KIND_SCREEN],
+        color: [rect.color.x, rect.color.y, rect.color.z, rect.alpha],
+    };
+    let (a, b, c, d) = (corner(rect.min.0, rect.min.1), corner(rect.max.0, rect.min.1), corner(rect.max.0, rect.max.1), corner(rect.min.0, rect.max.1));
+    out.extend_from_slice(&[a, b, c, a, c, d]);
+}
+
 pub fn build_vertices(scene: &Scene) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(scene.tris.len() * 3);
-    for t in &scene.tris {
-        for i in 0..3 {
-            let (v, n, c) = (t.v[i], t.n[i], t.c[i]);
-            out.push(Vertex {
-                pos: [v.x, v.y, v.z, 1.0],
-                normal: [n.x, n.y, n.z, 0.0],
-                color: [c.x, c.y, c.z, 1.0],
-            });
-        }
+    for triangle in &scene.tris {
+        push_triangle(&mut out, triangle);
     }
+    out
+}
+
+pub fn build_dynamic_vertices(scene: &Scene) -> Vec<Vertex> {
+    let mut out = Vec::with_capacity(scene.dynamic.len() * 3 + scene.overlay.len() * 6);
+    for triangle in &scene.dynamic {
+        push_triangle(&mut out, triangle);
+    }
+    let overlay_budget = scene.overlay.len().min(MAX_DYNAMIC_VERTICES.saturating_sub(out.len()) / 6);
+    let steps = scene.overlay.len().max(1) as f32;
+    for (index, rect) in scene.overlay.iter().take(overlay_budget).enumerate() {
+        push_overlay_rect(&mut out, rect, 0.5 - 0.4 * index as f32 / steps);
+    }
+    out.truncate(MAX_DYNAMIC_VERTICES);
     out
 }
 
@@ -70,16 +88,10 @@ pub fn frame_uniforms(scene: &Scene, cam: &Camera, aspect: f32, flip_y: bool) ->
 
 pub trait Renderer {
     fn name(&self) -> &'static str;
-    /// Uploads (or re-uploads) the scene's geometry.
     fn upload_scene(&mut self, scene: &Scene) -> Result<(), String>;
-    /// Draws one frame and shows it in `window`.
     fn render(&mut self, scene: &Scene, cam: &Camera, window: &mut dyn Window) -> Result<(), String>;
-    /// Draws one frame without a window and returns the pixels (0x00RRGGBB).
     fn render_offscreen(&mut self, scene: &Scene, cam: &Camera) -> Result<Framebuffer, String>;
 }
-
-/// Creates the renderer for a window. `auto` picks the best backend for this OS
-/// and falls back to the CPU renderer if the GPU backend cannot start.
 pub fn create(kind: &str, width: usize, height: usize, window: &dyn Window) -> Result<Box<dyn Renderer>, String> {
     match kind {
         "cpu" => Ok(Box::new(cpu::CpuRenderer::new(width, height))),
@@ -104,8 +116,6 @@ pub fn create(kind: &str, width: usize, height: usize, window: &dyn Window) -> R
         other => Err(format!("unknown or unavailable renderer '{}' (available here: {})", other, available())),
     }
 }
-
-/// Headless renderer for `engine render`. `auto` means the CPU reference renderer.
 pub fn create_headless(kind: &str, width: usize, height: usize) -> Result<Box<dyn Renderer>, String> {
     match kind {
         "cpu" | "auto" => Ok(Box::new(cpu::CpuRenderer::new(width, height))),

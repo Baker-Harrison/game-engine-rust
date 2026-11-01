@@ -1,19 +1,31 @@
 use crate::camera::Camera;
 use crate::math::Vec3;
 
-/// A world-space triangle with a flat base color.
 #[derive(Clone, Copy)]
 pub struct Tri {
     pub v: [Vec3; 3],
     pub n: [Vec3; 3],
     pub c: [Vec3; 3],
+    pub unlit: bool,
 }
 
 impl Tri {
     pub fn flat(v: [Vec3; 3], color: Vec3) -> Tri {
         let normal = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
-        Tri { v, n: [normal; 3], c: [color; 3] }
+        Tri { v, n: [normal; 3], c: [color; 3], unlit: false }
     }
+
+    pub fn glowing(v: [Vec3; 3], color: Vec3) -> Tri {
+        Tri { unlit: true, ..Tri::flat(v, color) }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct OverlayRect {
+    pub min: (f32, f32),
+    pub max: (f32, f32),
+    pub color: Vec3,
+    pub alpha: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -39,19 +51,27 @@ pub struct Scene {
     pub camera: Camera,
     pub tris: Vec<Tri>,
     pub placed_meshes: Vec<crate::model::mesh::Mesh>,
+    pub dynamic: Vec<Tri>,
+    pub overlay: Vec<OverlayRect>,
 }
 
 impl Scene {
-    pub fn from_mesh(mesh: &crate::model::mesh::Mesh, sky: Vec3) -> Scene {
-        let mut scene = Scene {
+    pub fn empty(sky: Vec3, fog: f32) -> Scene {
+        Scene {
             sky,
-            fog: 1.0e6,
+            fog,
             ground: None,
             boxes: Vec::new(),
             camera: Camera::new(Vec3::new(0.0, 1.7, 0.0)),
             tris: Vec::new(),
             placed_meshes: Vec::new(),
-        };
+            dynamic: Vec::new(),
+            overlay: Vec::new(),
+        }
+    }
+
+    pub fn from_mesh(mesh: &crate::model::mesh::Mesh, sky: Vec3) -> Scene {
+        let mut scene = Scene::empty(sky, 1.0e6);
         scene.add_mesh(mesh);
         scene
     }
@@ -63,20 +83,13 @@ impl Scene {
                 v: [mesh.positions[at(0)], mesh.positions[at(1)], mesh.positions[at(2)]],
                 n: [mesh.normals[at(0)], mesh.normals[at(1)], mesh.normals[at(2)]],
                 c: [mesh.colors[at(0)], mesh.colors[at(1)], mesh.colors[at(2)]],
+                unlit: false,
             });
         }
     }
 
     pub fn parse(src: &str) -> Result<Scene, String> {
-        let mut s = Scene {
-            sky: Vec3::new(0.53, 0.74, 0.93),
-            fog: 90.0,
-            ground: None,
-            boxes: Vec::new(),
-            camera: Camera::new(Vec3::new(0.0, 1.7, 0.0)),
-            tris: Vec::new(),
-            placed_meshes: Vec::new(),
-        };
+        let mut s = Scene::empty(Vec3::new(0.53, 0.74, 0.93), 90.0);
         for (i, raw) in src.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -186,9 +199,6 @@ impl Scene {
         }
         self.placed_meshes = placed;
     }
-
-    /// Moves a circle (the player) in the XZ plane out of any box it overlaps.
-    /// Boxes whose top is below `step` are walkable and ignored.
     pub fn blocked(&self, x: f32, z: f32, radius: f32) -> bool {
         self.boxes.iter().any(|b| {
             let top = b.center.y + b.size.y * 0.5;

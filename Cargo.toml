@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Agent-first game engine. Zero external crates, std only."
 
+[workspace]
+members = [".", "games/*"]
+
 [dependencies]
 # Intentionally empty. This engine uses only the Rust standard library.
 
