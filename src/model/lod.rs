@@ -56,6 +56,7 @@ struct Cluster {
     color_sum: Vec3,
     surface_sum: [f32; 2],
     uv_sum: [f32; 2],
+    sway_sum: f32,
     count: f32,
     origin: Vec3,
 }
@@ -83,6 +84,7 @@ pub fn simplify(mesh: &Mesh, cell: f32) -> Mesh {
         cluster.surface_sum[1] += mesh.surfaces[index][1];
         cluster.uv_sum[0] += mesh.uvs[index][0];
         cluster.uv_sum[1] += mesh.uvs[index][1];
+        cluster.sway_sum += mesh.sway[index];
         cluster.count += 1.0;
         vertex_cluster.push(id);
     }
@@ -117,6 +119,7 @@ pub fn simplify(mesh: &Mesh, cell: f32) -> Mesh {
             [cluster.surface_sum[0] / cluster.count, cluster.surface_sum[1] / cluster.count],
         );
         result.uvs[id as usize] = [cluster.uv_sum[0] / cluster.count, cluster.uv_sum[1] / cluster.count];
+        result.sway[id as usize] = cluster.sway_sum / cluster.count;
     }
     for triangle in 0..mesh.triangle_count() {
         let ids = [0, 1, 2].map(|k| vertex_cluster[mesh.indices[triangle * 3 + k] as usize] as u32);

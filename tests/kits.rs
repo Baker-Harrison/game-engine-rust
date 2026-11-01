@@ -204,3 +204,84 @@ fn ground_cover_respects_density_and_clear_zones() {
     assert!(cleared.triangle_count() < all.triangle_count() * 6 / 10);
     assert!(cleared.positions.iter().all(|p| p.x <= 0.5));
 }
+
+use engine::model::character::{build_hand_poses, build_viewmodel};
+use engine::model::humanoid::{hand, BodySpec, HandPose, Landmarks, FINGER_LENGTH_RATIOS};
+use engine::model::instancing::{Prefab, PrefabLibrary};
+use engine::model::props::carbine_sockets;
+
+#[test]
+fn adult_proportions_pass_all_anatomical_ratio_checks() {
+    let spec = BodySpec::adult(1.78);
+    let landmarks = Landmarks::for_spec(&spec);
+    for check in landmarks.ratio_checks(spec.height) {
+        assert!(check.passes(), "{}", check.message());
+    }
+}
+
+#[test]
+fn proportions_scale_with_height() {
+    let tall = Landmarks::for_spec(&BodySpec::adult(2.0));
+    let short = Landmarks::for_spec(&BodySpec::adult(1.5));
+    assert!((tall.head_top.y / short.head_top.y - 2.0 / 1.5).abs() < 1e-4);
+    assert!(tall.ratio_checks(2.0).iter().all(|c| c.passes()));
+}
+
+#[test]
+fn finger_ratios_follow_anatomy() {
+    let middle: f32 = FINGER_LENGTH_RATIOS[2].iter().sum();
+    let index: f32 = FINGER_LENGTH_RATIOS[1].iter().sum();
+    let ring: f32 = FINGER_LENGTH_RATIOS[3].iter().sum();
+    let little: f32 = FINGER_LENGTH_RATIOS[4].iter().sum();
+    assert!(middle > index && middle > ring && ring > little);
+}
+
+#[test]
+fn fist_is_more_compact_than_open_hand() {
+    let open = mesh_sdf(&hand(0.19, &HandPose::open()), 0.004, Vec3::splat(0.5)).bounds();
+    let fist = mesh_sdf(&hand(0.19, &HandPose::fist()), 0.004, Vec3::splat(0.5)).bounds();
+    assert!(fist.1.y - fist.0.y < (open.1.y - open.0.y) * 0.9);
+}
+
+#[test]
+fn grip_sockets_place_hands_on_the_weapon() {
+    let sockets = carbine_sockets();
+    let placed = sockets.pistol_grip.place(hand(0.19, &HandPose::pistol_grip()));
+    let (low, high) = mesh_sdf(&placed, 0.005, Vec3::splat(0.5)).bounds();
+    let center = (low + high) * 0.5;
+    assert!((center - sockets.pistol_grip.position).length() < 0.15, "{:?}", center);
+}
+
+#[test]
+fn hand_pose_asset_and_viewmodel_build() {
+    let style = Style::overgrown_manor();
+    assert_eq!(build_hand_poses(&style, 0.19).unwrap().parts.len(), 5);
+    assert!(build_viewmodel(&style, 0.19).unwrap().parts.iter().any(|p| p.name == "hand_support"));
+}
+
+#[test]
+fn prefab_lods_cut_drawn_triangles_for_distant_instances() {
+    let sphere = mesh_sdf(&Sdf::sphere(0.5), 0.015, Vec3::splat(0.5));
+    let mut library = PrefabLibrary::default();
+    let id = library.add_prefab(Prefab::from_mesh("ball", &sphere, &[0.3, 0.08], &[15.0, 40.0]));
+    for index in 0..50 {
+        library.place(id, Vec3::new(index as f32 * 3.0, 0.0, 0.0), 0.0);
+    }
+    let viewer = Vec3::ZERO;
+    assert!(library.drawn_triangles(viewer) < sphere.triangle_count() * 50 / 2);
+    assert!(library.stored_triangles() < sphere.triangle_count() * 2);
+    assert!(library.flatten(viewer).triangle_count() == library.drawn_triangles(viewer));
+}
+
+#[test]
+fn leaf_texture_has_cutout_alpha_and_glass_is_translucent() {
+    let style = Style::overgrown_manor();
+    let leaf = style.bake_material_maps("leaf", 64).unwrap();
+    let opaque = leaf.albedo.texels.iter().filter(|t| t[3] == 255).count();
+    let clear = leaf.albedo.texels.iter().filter(|t| t[3] == 0).count();
+    assert!(opaque > 64 * 64 / 5 && clear > 64 * 64 / 5, "opaque {} clear {}", opaque, clear);
+    let glass = style.bake_material_maps("glass", 16).unwrap();
+    assert!(glass.albedo.texels.iter().all(|t| t[3] > 40 && t[3] < 90));
+    assert!(glass.packed.get(3, 3)[0] < 30);
+    assert!(style.bake_material_maps("stone_wall", 16).unwrap().albedo.texels.iter().all(|t| t[3] == 255));
+}

@@ -11,6 +11,7 @@ pub struct Mesh {
     pub colors: Vec<Vec3>,
     pub surfaces: Vec<[f32; 2]>,
     pub uvs: Vec<[f32; 2]>,
+    pub sway: Vec<f32>,
     pub indices: Vec<u32>,
 }
 
@@ -49,6 +50,7 @@ impl Mesh {
         self.colors.push(color);
         self.surfaces.push(surface);
         self.uvs.push([0.0, 0.0]);
+        self.sway.push(0.0);
         (self.positions.len() - 1) as u32
     }
 
@@ -92,6 +94,7 @@ impl Mesh {
                         source.surfaces[original as usize],
                     );
                     self.uvs[created as usize] = chart_uv(position, axis, meters_per_tile);
+                    self.sway[created as usize] = source.sway[original as usize];
                     created
                 });
                 self.indices.push(index);
@@ -119,6 +122,7 @@ impl Mesh {
         self.colors.extend_from_slice(&other.colors);
         self.surfaces.extend_from_slice(&other.surfaces);
         self.uvs.extend_from_slice(&other.uvs);
+        self.sway.extend_from_slice(&other.sway);
         self.indices.extend(other.indices.iter().map(|i| i + offset));
     }
 
