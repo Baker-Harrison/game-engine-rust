@@ -11,6 +11,7 @@ use crate::math::Vec3;
 pub enum PartKind {
     Object,
     Architecture,
+    Foliage,
     Stage,
 }
 
@@ -147,11 +148,16 @@ pub struct Asset {
     pub views: Vec<View>,
     pub roof_part_names: Vec<String>,
     pub studio_lighting: bool,
+    pub declared_overlaps: Vec<(String, String)>,
 }
 
 impl Asset {
     pub fn new(name: &str) -> Asset {
         Asset { name: name.to_string(), ..Asset::default() }
+    }
+
+    pub fn declare_overlap(&mut self, first_group: &str, second_group: &str) {
+        self.declared_overlaps.push((first_group.to_string(), second_group.to_string()));
     }
 
     pub fn absorb(&mut self, mut other: Asset, prefix: &str, position: Vec3, yaw_degrees: f32) -> Footprint {
@@ -171,6 +177,9 @@ impl Asset {
         }
         for dimension in &mut other.dimensions {
             dimension.subject = format!("{}.{}", prefix, dimension.subject);
+        }
+        for (first, second) in other.declared_overlaps.drain(..) {
+            self.declared_overlaps.push((format!("{}.{}", prefix, first), format!("{}.{}", prefix, second)));
         }
         self.parts.append(&mut other.parts);
         self.dimensions.append(&mut other.dimensions);

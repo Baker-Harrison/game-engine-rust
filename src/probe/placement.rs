@@ -76,7 +76,8 @@ fn candidate_pairs(scene: &ProbeScene) -> Vec<(usize, usize)> {
     for members in cells.values() {
         for (index, &first) in members.iter().enumerate() {
             for &second in &members[index + 1..] {
-                if scene.object_of_triangle[first as usize] == scene.object_of_triangle[second as usize] {
+                let (owner_a, owner_b) = (scene.object_of_triangle[first as usize] as usize, scene.object_of_triangle[second as usize] as usize);
+                if owner_a == owner_b || scene.overlap_allowed(owner_a, owner_b) {
                     continue;
                 }
                 if boxes_apart(scene, first as usize, second as usize) {

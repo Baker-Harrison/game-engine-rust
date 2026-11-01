@@ -147,7 +147,7 @@ pub struct ObjectReport {
 
 pub fn findings(scene: &ProbeScene, reports: &[ObjectReport], targets: &Targets) -> Vec<Finding> {
     let mut out = Vec::new();
-    for (object, report) in scene.objects.iter().zip(reports) {
+    for (object, report) in scene.objects.iter().zip(reports).filter(|(object, _)| !object.foliage) {
         let geometry = &report.geometry;
         if geometry.extent.max_element() >= targets.box_like_min_extent && geometry.raw_hard_edge_length > targets.raw_hard_edge_length_max {
             out.push(Finding::new(

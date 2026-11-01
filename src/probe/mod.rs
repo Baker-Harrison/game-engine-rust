@@ -51,6 +51,7 @@ impl Finding {
 
 pub struct ProbeObject {
     pub name: String,
+    pub foliage: bool,
     pub first_triangle: usize,
     pub triangle_count: usize,
 }
@@ -60,31 +61,44 @@ pub struct ProbeScene {
     pub objects: Vec<ProbeObject>,
     pub object_of_triangle: Vec<u32>,
     pub views: Vec<View>,
+    pub declared_overlaps: Vec<(String, String)>,
+}
+
+impl ProbeScene {
+    pub fn overlap_allowed(&self, first: usize, second: usize) -> bool {
+        let (a, b) = (&self.objects[first], &self.objects[second]);
+        if a.foliage || b.foliage {
+            return true;
+        }
+        self.declared_overlaps.iter().any(|(x, y)| (*x == a.name && *y == b.name) || (*x == b.name && *y == a.name))
+    }
 }
 
 impl ProbeScene {
     pub fn from_asset(asset: &Asset, views: Vec<View>) -> ProbeScene {
-        let mut groups: BTreeMap<String, Vec<&Mesh>> = BTreeMap::new();
+        let mut groups: BTreeMap<String, (bool, Vec<&Mesh>)> = BTreeMap::new();
         for part in asset.parts.iter().filter(|part| part.kind != PartKind::Stage) {
             let name = part.name.split_once('.').map(|(prefix, _)| prefix.to_string()).unwrap_or_else(|| part.name.clone());
-            groups.entry(name).or_default().push(&part.mesh);
+            let entry = groups.entry(name).or_insert((false, Vec::new()));
+            entry.0 |= part.kind == PartKind::Foliage;
+            entry.1.push(&part.mesh);
         }
         let mut mesh = Mesh::new();
         let mut objects = Vec::new();
         let mut object_of_triangle = Vec::new();
-        for (name, meshes) in groups {
+        for (name, (foliage, meshes)) in groups {
             let first_triangle = mesh.triangle_count();
             for part_mesh in meshes {
                 mesh.append(part_mesh);
             }
             let triangle_count = mesh.triangle_count() - first_triangle;
             object_of_triangle.extend(std::iter::repeat(objects.len() as u32).take(triangle_count));
-            objects.push(ProbeObject { name, first_triangle, triangle_count });
+            objects.push(ProbeObject { name, foliage, first_triangle, triangle_count });
         }
         let settings = asset.default_bake_settings();
         let occluders = crate::model::bvh::Bvh::from_meshes(&[&asset.merged_mesh(&[])]);
         crate::model::bake::bake(&mut mesh, &occluders, &settings);
-        ProbeScene { mesh, objects, object_of_triangle, views }
+        ProbeScene { mesh, objects, object_of_triangle, views, declared_overlaps: asset.declared_overlaps.clone() }
     }
 }
 

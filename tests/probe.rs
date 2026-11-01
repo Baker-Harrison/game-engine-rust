@@ -55,3 +55,36 @@ fn raw_box_fails_the_hard_edge_gate_and_rounded_box_passes() {
     let scene = scene_of(vec![("soft", rounded)]);
     assert!(!errors(&scene).iter().any(|e| e.contains("unbeveled_hard_edge_length_m")), "{:?}", errors(&scene));
 }
+
+fn overlapping_pair(mutate: impl Fn(&mut Asset)) -> Vec<String> {
+    let mut asset = Asset::new("test");
+    asset.parts.push(Part::from_mesh("a", PartKind::Object, boxed(v(0.0, 0.5, 0.0), v(1.0, 1.0, 1.0))));
+    asset.parts.push(Part::from_mesh("b", PartKind::Object, boxed(v(0.6, 0.9, 0.2), v(1.0, 1.0, 1.0))));
+    mutate(&mut asset);
+    let scene = ProbeScene::from_asset(&asset, Vec::new());
+    errors(&scene).into_iter().filter(|e| e.contains("interpenetration")).collect()
+}
+
+#[test]
+fn declared_overlap_is_allowed_in_either_order() {
+    assert_eq!(overlapping_pair(|_| {}).len(), 1);
+    assert!(overlapping_pair(|asset| asset.declare_overlap("a", "b")).is_empty());
+    assert!(overlapping_pair(|asset| asset.declare_overlap("b", "a")).is_empty());
+}
+
+#[test]
+fn foliage_parts_may_overlap_and_skip_surface_gates() {
+    let errors = overlapping_pair(|asset| asset.parts[1].kind = PartKind::Foliage);
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn foliage_open_surfaces_pass_model_validation() {
+    let mut card = Mesh::new();
+    card.add_flat_triangle(v(0.0, 0.0, 0.0), v(0.2, 0.0, 0.0), v(0.0, 0.2, 0.0), v(0.2, 0.5, 0.2));
+    let mut asset = Asset::new("bush");
+    asset.parts.push(Part::from_mesh("bush.leaves", PartKind::Foliage, card.clone()));
+    assert!(engine::model::validate::validate(&asset).iter().all(|f| f.severity != engine::model::validate::Severity::Error));
+    asset.parts[0].kind = PartKind::Object;
+    assert!(engine::model::validate::validate(&asset).iter().any(|f| f.severity == engine::model::validate::Severity::Error));
+}
